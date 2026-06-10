@@ -13,10 +13,11 @@ const liveSocket = vi.hoisted(() => {
 
 vi.mock("./api", () => ({
   login: vi.fn().mockResolvedValue(undefined),
+  listRoots: vi.fn().mockResolvedValue([{ id: "workspace", label: "Workspace", path: "/tmp/workspace" }]),
   listSessions: vi.fn().mockResolvedValue([]),
   createSession: vi.fn().mockResolvedValue({
     id: "sess-1",
-    agentKind: "claude",
+    agentKind: "codex",
     events: [{ id: 1, eventType: "assistant.message", payload: { text: "done" } }],
   }),
   fetchSessionSnapshot: vi.fn(),
@@ -25,15 +26,23 @@ vi.mock("./api", () => ({
 }));
 
 import App from "./App";
-import { connectEventStream, createSession, listSessions, login, sendSessionMessage } from "./api";
+import {
+  connectEventStream,
+  createSession,
+  listRoots,
+  listSessions,
+  login,
+  sendSessionMessage,
+} from "./api";
 
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  vi.mocked(listRoots).mockResolvedValue([{ id: "workspace", label: "Workspace", path: "/tmp/workspace" }]);
   vi.mocked(listSessions).mockResolvedValue([]);
   vi.mocked(createSession).mockResolvedValue({
     id: "sess-1",
-    agentKind: "claude",
+    agentKind: "codex",
     events: [{ id: 1, eventType: "assistant.message", payload: { text: "done" } }],
   });
   liveSocket.onmessage = null;
@@ -49,21 +58,24 @@ describe("App", () => {
 
     await waitFor(() => {
       expect(login).toHaveBeenCalledWith("1234");
+      expect(listRoots).toHaveBeenCalledTimes(1);
       expect(listSessions).toHaveBeenCalledTimes(1);
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Create Claude session" }));
+    fireEvent.change(screen.getByLabelText("Agent"), { target: { value: "codex" } });
+    fireEvent.change(screen.getByLabelText("Path"), { target: { value: "apps/api" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create session" }));
 
     await waitFor(() => {
       expect(createSession).toHaveBeenCalledWith({
         rootId: "workspace",
-        path: "repo",
-        agentKind: "claude",
+        path: "apps/api",
+        agentKind: "codex",
       });
     });
 
     expect(await screen.findByText("Session details")).toBeInTheDocument();
-    expect(screen.getByText("claude")).toBeInTheDocument();
+    expect(screen.getByText("codex")).toBeInTheDocument();
     expect(connectEventStream).toHaveBeenCalledWith("sess-1", 1);
 
     liveSocket.onmessage?.({

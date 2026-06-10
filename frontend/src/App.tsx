@@ -3,6 +3,7 @@ import {
   connectEventStream,
   createSession,
   fetchSessionSnapshot,
+  listRoots,
   listSessions,
   login,
   sendSessionMessage,
@@ -11,16 +12,21 @@ import { CreateSessionView } from "./components/CreateSessionView";
 import { LoginView } from "./components/LoginView";
 import { SessionDetailView } from "./components/SessionDetailView";
 import { SessionListView } from "./components/SessionListView";
-import type { SessionDetail, SessionEvent, SessionSummary } from "./types";
+import type { SessionDetail, SessionEvent, SessionSummary, WorkspaceRoot } from "./types";
 
 export default function App() {
   const [authenticated, setAuthenticated] = useState(false);
+  const [roots, setRoots] = useState<WorkspaceRoot[]>([]);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [selectedSession, setSelectedSession] = useState<SessionDetail | null>(null);
   const [loginError, setLoginError] = useState<string | null>(null);
 
   async function refreshSessions(): Promise<void> {
     setSessions(await listSessions());
+  }
+
+  async function refreshRoots(): Promise<void> {
+    setRoots(await listRoots());
   }
 
   useEffect(() => {
@@ -69,6 +75,7 @@ export default function App() {
               }}
             />
             <CreateSessionView
+              roots={roots}
               onSubmit={(input) => {
                 void (async () => {
                   const created = await createSession(input);
@@ -87,6 +94,7 @@ export default function App() {
             void (async () => {
               try {
                 await login(pin);
+                await refreshRoots();
                 await refreshSessions();
                 setAuthenticated(true);
                 setLoginError(null);
