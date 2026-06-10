@@ -1,6 +1,16 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+const liveSocket = vi.hoisted(() => {
+  const socket = {
+    onmessage: null as ((event: { data: string }) => void) | null,
+    onerror: null as ((event: Event) => void) | null,
+    close: vi.fn(),
+  };
+
+  return socket;
+});
+
 vi.mock("./api", () => ({
   login: vi.fn().mockResolvedValue(undefined),
   listSessions: vi.fn().mockResolvedValue([]),
@@ -10,10 +20,11 @@ vi.mock("./api", () => ({
     events: [{ id: 1, eventType: "assistant.message", payload: { text: "done" } }],
   }),
   fetchSessionSnapshot: vi.fn(),
+  connectEventStream: vi.fn(() => liveSocket as unknown as WebSocket),
 }));
 
 import App from "./App";
-import { createSession, listSessions, login } from "./api";
+import { connectEventStream, createSession, listSessions, login } from "./api";
 
 afterEach(() => {
   cleanup();
@@ -24,6 +35,8 @@ afterEach(() => {
     agentKind: "claude",
     events: [{ id: 1, eventType: "assistant.message", payload: { text: "done" } }],
   });
+  liveSocket.onmessage = null;
+  liveSocket.onerror = null;
 });
 
 describe("App", () => {
@@ -50,5 +63,16 @@ describe("App", () => {
 
     expect(await screen.findByText("Session details")).toBeInTheDocument();
     expect(screen.getByText("claude")).toBeInTheDocument();
+    expect(connectEventStream).toHaveBeenCalledWith("sess-1", 1);
+
+    liveSocket.onmessage?.({
+      data: JSON.stringify({
+        id: 2,
+        eventType: "assistant.message",
+        payload: { text: "live" },
+      }),
+    });
+
+    expect(await screen.findByText("live")).toBeInTheDocument();
   });
 });

@@ -9,6 +9,7 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::json;
+use tokio::time::{sleep, Duration};
 
 use crate::{
     app::AppState,
@@ -34,21 +35,37 @@ pub async fn stream_session_events(
 
     ws.on_upgrade(move |socket| async move {
         let after = query.after.unwrap_or(0);
-        let _ = replay_events(socket, state, session_id, after).await;
+        let _ = follow_events(socket, state, session_id, after).await;
     })
 }
 
-async fn replay_events(
+async fn follow_events(
     mut socket: WebSocket,
     state: AppState,
     session_id: String,
     after: i64,
 ) -> anyhow::Result<()> {
-    let events = state.sessions.events_after(&session_id, after).await?;
+    let mut cursor = after;
 
-    for event in events {
-        let dto = event_to_dto(event);
-        socket.send(Message::Text(serde_json::to_string(&dto)?.into())).await?;
+    loop {
+        let events = state.sessions.events_after(&session_id, cursor).await?;
+
+        for event in events {
+            cursor = event.id;
+            let dto = event_to_dto(event);
+            socket.send(Message::Text(serde_json::to_string(&dto)?.into())).await?;
+        }
+
+        tokio::select! {
+            incoming = socket.recv() => {
+                match incoming {
+                    Some(Ok(Message::Close(_))) | None => break,
+                    Some(Ok(_)) => {}
+                    Some(Err(_)) => break,
+                }
+            }
+            _ = sleep(Duration::from_millis(25)) => {}
+        }
     }
 
     Ok(())

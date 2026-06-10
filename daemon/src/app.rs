@@ -1,5 +1,9 @@
 use axum::Router;
 
+use std::sync::Arc;
+
+use tokio::process::Child;
+
 use crate::{
     adapters::process::{spawn_command, LaunchCommand},
     auth::AuthState,
@@ -27,20 +31,24 @@ pub async fn build_router(config: AppConfig) -> Router {
 }
 
 pub async fn build_test_router() -> Router {
+    build_test_router_with_spawner(Arc::new(|_command: LaunchCommand| {
+        spawn_command(LaunchCommand {
+            program: "sh".into(),
+            args: vec!["-lc".into(), "true".into()],
+        })
+    }))
+    .await
+}
+
+pub async fn build_test_router_with_spawner(
+    process_spawner: Arc<dyn Fn(LaunchCommand) -> anyhow::Result<Child> + Send + Sync>,
+) -> Router {
     let config = AppConfig::for_tests();
     let store = SqliteSessionStore::in_memory().await.unwrap();
     let state = AppState {
         auth: AuthState::new(config.pin.clone()),
         config,
-        sessions: SessionService::new_with_spawner(
-            store,
-            std::sync::Arc::new(|_command: LaunchCommand| {
-                spawn_command(LaunchCommand {
-                    program: "sh".into(),
-                    args: vec!["-lc".into(), "true".into()],
-                })
-            }),
-        ),
+        sessions: SessionService::new_with_spawner(store, process_spawner),
     };
 
     routes().with_state(state)

@@ -1,10 +1,10 @@
-import { useState } from "react";
-import { createSession, fetchSessionSnapshot, listSessions, login } from "./api";
+import { useEffect, useState } from "react";
+import { connectEventStream, createSession, fetchSessionSnapshot, listSessions, login } from "./api";
 import { CreateSessionView } from "./components/CreateSessionView";
 import { LoginView } from "./components/LoginView";
 import { SessionDetailView } from "./components/SessionDetailView";
 import { SessionListView } from "./components/SessionListView";
-import type { SessionDetail, SessionSummary } from "./types";
+import type { SessionDetail, SessionEvent, SessionSummary } from "./types";
 
 export default function App() {
   const [authenticated, setAuthenticated] = useState(false);
@@ -15,6 +15,28 @@ export default function App() {
   async function refreshSessions(): Promise<void> {
     setSessions(await listSessions());
   }
+
+  useEffect(() => {
+    if (!selectedSession) return;
+
+    const lastEventId = selectedSession.events.at(-1)?.id ?? 0;
+    const socket = connectEventStream(selectedSession.id, lastEventId);
+    socket.onmessage = (event) => {
+      const nextEvent = JSON.parse(event.data) as SessionEvent;
+      setSelectedSession((current) => {
+        if (!current || current.id !== selectedSession.id) return current;
+        if (current.events.some((item) => item.id === nextEvent.id)) return current;
+        return {
+          ...current,
+          events: [...current.events, nextEvent],
+        };
+      });
+    };
+
+    return () => {
+      socket.close();
+    };
+  }, [selectedSession]);
 
   return (
     <main className="shell">

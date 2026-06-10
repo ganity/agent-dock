@@ -5,11 +5,23 @@ use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tower::ServiceExt;
 
-use agent_workspace_daemon::app::build_test_router;
+use agent_workspace_daemon::{
+    adapters::process::{spawn_command, LaunchCommand},
+    app::build_test_router_with_spawner,
+};
 
 #[tokio::test]
 async fn websocket_stream_replays_events_after_cursor() {
-    let app = build_test_router().await;
+    let app = build_test_router_with_spawner(std::sync::Arc::new(|_command: LaunchCommand| {
+        spawn_command(LaunchCommand {
+            program: "sh".into(),
+            args: vec![
+                "-lc".into(),
+                "sleep 0.1; printf '%s\n' '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"later\"}]}}'".into(),
+            ],
+        })
+    }))
+    .await;
 
     let login = app
         .clone()
@@ -68,4 +80,15 @@ async fn websocket_stream_replays_events_after_cursor() {
     let text = first.into_text().unwrap();
 
     assert!(text.contains("\"eventType\":\"session.created\""));
+
+    let second = socket.next().await.unwrap().unwrap();
+    let second_text = second.into_text().unwrap();
+
+    assert!(second_text.contains("\"eventType\":\"session.status.changed\""));
+
+    let third = socket.next().await.unwrap().unwrap();
+    let third_text = third.into_text().unwrap();
+
+    assert!(third_text.contains("\"eventType\":\"assistant.message\""));
+    assert!(third_text.contains("\"later\""));
 }

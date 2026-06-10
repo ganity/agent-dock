@@ -54,3 +54,8 @@ export async function fetchSessionSnapshot(id: string): Promise<SessionDetail> {
 
   return (await response.json()) as SessionDetail;
 }
+
+export function connectEventStream(id: string, after: number): WebSocket {
+  const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+  return new WebSocket(`${protocol}://${window.location.host}/ws/sessions/${id}/events?after=${after}`);
+}
