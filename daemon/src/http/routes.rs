@@ -9,7 +9,9 @@ use serde_json::json;
 
 use crate::{
     app::AppState,
-    http::dto::{LoginRequest, WorkspaceRootDto},
+    http::dto::{
+        CreateSessionRequest, LoginRequest, SessionEventDto, SessionSnapshotDto, WorkspaceRootDto,
+    },
     workspace,
 };
 
@@ -18,6 +20,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/health", get(health))
         .route("/api/auth/login", post(login))
         .route("/api/workspaces/roots", get(workspace_roots))
+        .route("/api/sessions", post(create_session))
 }
 
 async fn health() -> Json<serde_json::Value> {
@@ -70,4 +73,56 @@ async fn workspace_roots(
         .collect::<Vec<_>>();
 
     (StatusCode::OK, Json(json!({ "roots": roots }))).into_response()
+}
+
+async fn create_session(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<CreateSessionRequest>,
+) -> impl IntoResponse {
+    if !is_authenticated(&state, &headers) {
+        return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "UNAUTHORIZED" }))).into_response();
+    }
+
+    let session_id = match state
+        .sessions
+        .create_placeholder_session(request.root_id, request.path, request.agent_kind)
+        .await
+    {
+        Ok(value) => value,
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": error.to_string() })),
+            )
+                .into_response();
+        }
+    };
+
+    let snapshot = match state.sessions.load_snapshot(&session_id).await {
+        Ok(value) => value,
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": error.to_string() })),
+            )
+                .into_response();
+        }
+    };
+
+    let response = SessionSnapshotDto {
+        id: snapshot.session.id,
+        agent_kind: snapshot.session.agent_kind,
+        events: snapshot
+            .events
+            .into_iter()
+            .map(|event| SessionEventDto {
+                id: event.id,
+                event_type: event.event_type,
+                payload: serde_json::from_str(&event.payload_json).unwrap(),
+            })
+            .collect(),
+    };
+
+    (StatusCode::OK, Json(response)).into_response()
 }

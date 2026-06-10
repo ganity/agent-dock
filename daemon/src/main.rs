@@ -7,5 +7,5 @@ async fn main() {
     let config = AppConfig::for_tests();
     let address: SocketAddr = config.listen.parse().unwrap();
     let listener = tokio::net::TcpListener::bind(address).await.unwrap();
-    axum::serve(listener, build_router(config)).await.unwrap();
+    axum::serve(listener, build_router(config).await).await.unwrap();
 }
