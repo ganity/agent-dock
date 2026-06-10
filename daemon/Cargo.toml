@@ -1,0 +1,23 @@
+[package]
+name = "agent-workspace-daemon"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "agent_workspace_daemon"
+path = "src/lib.rs"
+
+[[bin]]
+name = "agent-workspace-daemon"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0"
+axum = { version = "0.8", features = ["macros"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.47", features = ["macros", "rt-multi-thread", "net"] }
+tower = "0.5"
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
