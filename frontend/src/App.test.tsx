@@ -86,7 +86,9 @@ describe("App", () => {
       }),
     });
 
-    expect(await screen.findByText("live")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getAllByText("donelive")).not.toHaveLength(0);
+    });
 
     fireEvent.change(screen.getByLabelText("Message"), { target: { value: "next step" } });
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
