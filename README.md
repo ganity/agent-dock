@@ -25,6 +25,16 @@ Implemented so far:
 - real `codex` app-server bootstrap using `initialize`, `thread/start`, and `turn/start`
 - multi-turn `claude` sessions using `--resume <session_id>` across per-turn subprocesses
 
+## Recovery And Attach
+
+The current branch also adds:
+
+- file-backed SQLite persistence for daemon state
+- durable restart recovery for stored sessions and events
+- best-effort attach records for existing `codex` / `claude` runtime session ids
+- attach-session UI flow in the browser shell
+- mobile-oriented spacing and panel sizing polish
+
 ## Run The Foundation
 
 ### Daemon
