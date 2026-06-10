@@ -20,7 +20,9 @@ pub struct AppState {
 }
 
 pub async fn build_router(config: AppConfig) -> Router {
-    let store = SqliteSessionStore::in_memory().await.unwrap();
+    let store = SqliteSessionStore::from_path(std::path::Path::new(&config.database_path))
+        .await
+        .unwrap();
     let state = AppState {
         auth: AuthState::new(config.pin.clone()),
         config,

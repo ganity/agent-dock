@@ -1,4 +1,7 @@
-use sqlx::{Row, SqlitePool};
+use sqlx::{
+    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
+    Row, SqlitePool,
+};
 use uuid::Uuid;
 
 use crate::session::model::{SessionRecord, SessionSnapshot, SessionSummary, StoredEvent};
@@ -10,6 +13,19 @@ pub struct SqliteSessionStore {
 impl SqliteSessionStore {
     pub async fn in_memory() -> anyhow::Result<Self> {
         let pool = SqlitePool::connect("sqlite::memory:").await?;
+        sqlx::migrate!("./migrations").run(&pool).await?;
+        Ok(Self { pool })
+    }
+
+    pub async fn from_path(path: &std::path::Path) -> anyhow::Result<Self> {
+        if let Some(parent) = path.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+
+        let options = SqliteConnectOptions::new()
+            .filename(path)
+            .create_if_missing(true);
+        let pool = SqlitePoolOptions::new().connect_with(options).await?;
         sqlx::migrate!("./migrations").run(&pool).await?;
         Ok(Self { pool })
     }

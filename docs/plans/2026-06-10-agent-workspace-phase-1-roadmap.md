@@ -27,9 +27,9 @@ Implement these plans in order:
 
 1. [Agent Workspace Foundation Plan](/home/jhz/tools/agent-terminal-platform/agent-workspace/docs/plans/2026-06-10-agent-workspace-foundation-implementation-plan.md)
 2. [Managed Sessions Plan](/home/jhz/tools/agent-terminal-platform/agent-workspace/docs/plans/2026-06-10-agent-workspace-managed-sessions-implementation-plan.md)
-3. Recovery And Attach Plan
+3. [Recovery And Attach Plan](/home/jhz/tools/agent-terminal-platform/agent-workspace/docs/plans/2026-06-10-agent-workspace-recovery-and-attach-implementation-plan.md)
 
-Plans 1 and 2 are executable now. Plan 3 should be written immediately after Plan 2 is implemented and verified, using the same planning discipline.
+Plans 1, 2, and 3 are now executable.
 
 ## Scope Mapping
 
@@ -80,6 +80,6 @@ Covers:
 
 ## Current Recommended Next Step
 
-Execute Plan 2:
+Execute Plan 3:
 
-- [Managed Sessions Plan](/home/jhz/tools/agent-terminal-platform/agent-workspace/docs/plans/2026-06-10-agent-workspace-managed-sessions-implementation-plan.md)
+- [Recovery And Attach Plan](/home/jhz/tools/agent-terminal-platform/agent-workspace/docs/plans/2026-06-10-agent-workspace-recovery-and-attach-implementation-plan.md)
