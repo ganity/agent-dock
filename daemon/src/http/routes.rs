@@ -13,6 +13,7 @@ use crate::{
         CreateSessionRequest, LoginRequest, SessionEventDto, SessionSnapshotDto, SessionSummaryDto,
         WorkspaceRootDto,
     },
+    http::ws::stream_session_events,
     workspace,
 };
 
@@ -23,6 +24,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/workspaces/roots", get(workspace_roots))
         .route("/api/sessions", post(create_session).get(list_sessions))
         .route("/api/sessions/{id}", get(get_session))
+        .route("/ws/sessions/{id}/events", get(stream_session_events))
 }
 
 async fn health() -> Json<serde_json::Value> {
@@ -37,7 +39,7 @@ fn session_token_from_headers(headers: &HeaderMap) -> Option<&str> {
         .and_then(|value| value.split(';').next())
 }
 
-fn is_authenticated(state: &AppState, headers: &HeaderMap) -> bool {
+pub(crate) fn is_authenticated(state: &AppState, headers: &HeaderMap) -> bool {
     session_token_from_headers(headers).is_some_and(|value| state.auth.is_authenticated(value))
 }
 

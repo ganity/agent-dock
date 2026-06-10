@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::session::{
-    model::{SessionSnapshot, SessionSummary},
+    model::{SessionSnapshot, SessionSummary, StoredEvent},
     store::SqliteSessionStore,
 };
 
@@ -39,5 +39,9 @@ impl SessionService {
 
     pub async fn list_sessions(&self) -> anyhow::Result<Vec<SessionSummary>> {
         self.store.list_sessions().await
+    }
+
+    pub async fn events_after(&self, session_id: &str, cursor: i64) -> anyhow::Result<Vec<StoredEvent>> {
+        self.store.events_after(session_id, cursor).await
     }
 }
