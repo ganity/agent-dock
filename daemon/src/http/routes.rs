@@ -10,7 +10,8 @@ use serde_json::json;
 use crate::{
     app::AppState,
     http::dto::{
-        CreateSessionRequest, LoginRequest, SessionEventDto, SessionSnapshotDto, WorkspaceRootDto,
+        CreateSessionRequest, LoginRequest, SessionEventDto, SessionSnapshotDto, SessionSummaryDto,
+        WorkspaceRootDto,
     },
     workspace,
 };
@@ -20,7 +21,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/health", get(health))
         .route("/api/auth/login", post(login))
         .route("/api/workspaces/roots", get(workspace_roots))
-        .route("/api/sessions", post(create_session))
+        .route("/api/sessions", post(create_session).get(list_sessions))
 }
 
 async fn health() -> Json<serde_json::Value> {
@@ -125,4 +126,36 @@ async fn create_session(
     };
 
     (StatusCode::OK, Json(response)).into_response()
+}
+
+async fn list_sessions(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if !is_authenticated(&state, &headers) {
+        return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "UNAUTHORIZED" }))).into_response();
+    }
+
+    let sessions = match state.sessions.list_sessions().await {
+        Ok(value) => value,
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": error.to_string() })),
+            )
+                .into_response();
+        }
+    };
+
+    let response = sessions
+        .into_iter()
+        .map(|session| SessionSummaryDto {
+            id: session.id,
+            agent_kind: session.agent_kind,
+            status: session.status,
+            workspace_path: session.workspace_path,
+        })
+        .collect::<Vec<_>>();
+
+    (StatusCode::OK, Json(json!({ "sessions": response }))).into_response()
 }

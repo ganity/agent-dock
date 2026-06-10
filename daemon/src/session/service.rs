@@ -1,6 +1,9 @@
 use std::sync::Arc;
 
-use crate::session::{model::SessionSnapshot, store::SqliteSessionStore};
+use crate::session::{
+    model::{SessionSnapshot, SessionSummary},
+    store::SqliteSessionStore,
+};
 
 #[derive(Clone)]
 pub struct SessionService {
@@ -32,5 +35,9 @@ impl SessionService {
 
     pub async fn load_snapshot(&self, session_id: &str) -> anyhow::Result<SessionSnapshot> {
         self.store.load_snapshot(session_id).await
+    }
+
+    pub async fn list_sessions(&self) -> anyhow::Result<Vec<SessionSummary>> {
+        self.store.list_sessions().await
     }
 }

@@ -23,12 +23,29 @@ export async function listRoots(): Promise<WorkspaceRoot[]> {
 }
 
 export async function listSessions(): Promise<SessionSummary[]> {
-  return [];
+  const response = await fetch("/api/sessions");
+  if (!response.ok) {
+    throw new Error("Failed to load sessions");
+  }
+
+  const data = (await response.json()) as { sessions: SessionSummary[] };
+  return data.sessions;
 }
 
-export async function createSession(_input: CreateSessionInput): Promise<SessionSummary> {
+export async function createSession(input: CreateSessionInput): Promise<SessionSummary> {
+  const response = await fetch("/api/sessions", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+
+  if (!response.ok) {
+    throw new Error("Failed to create session");
+  }
+
+  const data = (await response.json()) as SessionSummary;
   return {
-    id: "placeholder",
-    agentKind: "placeholder",
+    id: data.id,
+    agentKind: data.agentKind,
   };
 }

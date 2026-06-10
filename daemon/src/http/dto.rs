@@ -36,3 +36,13 @@ pub struct SessionSnapshotDto {
     pub agent_kind: String,
     pub events: Vec<SessionEventDto>,
 }
+
+#[derive(Serialize)]
+pub struct SessionSummaryDto {
+    pub id: String,
+    #[serde(rename = "agentKind")]
+    pub agent_kind: String,
+    pub status: String,
+    #[serde(rename = "workspacePath")]
+    pub workspace_path: String,
+}
