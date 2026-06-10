@@ -15,9 +15,10 @@ describe("SessionDetailView", () => {
             { id: 1, eventType: "assistant.thinking.delta", payload: { text: "plan first" } },
             { id: 2, eventType: "assistant.message", payload: { text: "done" } },
             { id: 3, eventType: "file.change.reported", payload: { files: ["src/app.rs"] } },
-            { id: 4, eventType: "session.status.changed", payload: { status: "running" } },
-            { id: 5, eventType: "tool.call.started", payload: { item: { type: "reasoning" } } },
-            { id: 6, eventType: "tool.call.completed", payload: { item: { type: "reasoning" } } },
+            { id: 4, eventType: "session.attached", payload: { runtimeSessionId: "thread-abc" } },
+            { id: 5, eventType: "session.status.changed", payload: { status: "running" } },
+            { id: 6, eventType: "tool.call.started", payload: { item: { type: "reasoning" } } },
+            { id: 7, eventType: "tool.call.completed", payload: { item: { type: "reasoning" } } },
           ],
         }}
         onBack={() => {}}
@@ -29,6 +30,7 @@ describe("SessionDetailView", () => {
     expect(screen.getByText("Thinking")).toBeInTheDocument();
     expect(screen.getByText("done")).toBeInTheDocument();
     expect(screen.getByText("src/app.rs")).toBeInTheDocument();
+    expect(screen.getByText("thread-abc")).toBeInTheDocument();
     expect(screen.getByText("running")).toBeInTheDocument();
     expect(screen.getAllByText("Tool activity")).toHaveLength(2);
   });

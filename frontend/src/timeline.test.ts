@@ -70,6 +70,7 @@ describe("projectTimelineEvents", () => {
       { id: 1, eventType: "user.message", payload: { text: "hello" } },
       { id: 2, eventType: "assistant.message", payload: { text: "done" } },
       { id: 3, eventType: "session.status.changed", payload: { status: "running" } },
+      { id: 4, eventType: "session.attached", payload: { runtimeSessionId: "thread-abc" } },
     ];
 
     const items = projectTimelineEvents(events);
@@ -78,6 +79,7 @@ describe("projectTimelineEvents", () => {
       { id: "user:1", kind: "user", text: "hello" },
       { id: "assistant:2", kind: "assistant", text: "done" },
       { id: "status:3", kind: "status", status: "running" },
+      { id: "attached:4", kind: "attached", runtimeSessionId: "thread-abc" },
     ]);
   });
 });

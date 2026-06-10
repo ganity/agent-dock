@@ -131,3 +131,87 @@ async fn attached_codex_session_can_resume_and_emit_assistant_message() {
     assert!(text.contains("\"assistant.message\""));
     assert!(text.contains("attached reply"));
 }
+
+
+#[tokio::test]
+async fn attached_claude_session_can_resume_and_emit_assistant_message() {
+    let app = build_test_router_with_spawner(Arc::new(|_command: LaunchCommand| {
+        spawn_command(LaunchCommand {
+            program: "sh".into(),
+            args: vec![
+                "-lc".into(),
+                "printf '%s\n%s\n' \
+                 '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"attached hello\"}]}}' \
+                 '{\"type\":\"result\",\"session_id\":\"thread-abc\",\"result\":\"attached hello\"}'".into(),
+            ],
+        })
+    }))
+    .await;
+
+    let login = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/auth/login")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"pin":"1234"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let cookie = login.headers().get("set-cookie").unwrap().to_str().unwrap().to_string();
+
+    let attach = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/sessions/attach")
+                .header("content-type", "application/json")
+                .header("cookie", cookie.clone())
+                .body(Body::from(
+                    r#"{"rootId":"workspace","path":"repo","agentKind":"claude","runtimeSessionId":"thread-abc"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let attach_body = to_bytes(attach.into_body(), usize::MAX).await.unwrap();
+    let attach_json: serde_json::Value = serde_json::from_slice(&attach_body).unwrap();
+    let session_id = attach_json["id"].as_str().unwrap().to_string();
+
+    let send = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/sessions/{session_id}/messages"))
+                .header("content-type", "application/json")
+                .header("cookie", cookie.clone())
+                .body(Body::from(r#"{"message":"hello"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(send.status(), StatusCode::OK);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let detail = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/sessions/{session_id}"))
+                .header("cookie", cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let body = to_bytes(detail.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("\"assistant.message\""));
+    assert!(text.contains("attached hello"));
+}

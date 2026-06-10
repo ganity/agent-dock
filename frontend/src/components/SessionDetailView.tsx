@@ -2,6 +2,7 @@ import type { SessionDetail } from "../types";
 import { projectTimelineEvents } from "../timeline";
 import { Composer } from "./Composer";
 import {
+  AttachedSessionCard,
   FileChangeCard,
   MessageCard,
   StatusCard,
@@ -38,6 +39,9 @@ export function SessionDetailView(props: {
         }
         if (item.kind === "file_change") {
           return <FileChangeCard key={item.id} files={item.files} />;
+        }
+        if (item.kind === "attached") {
+          return <AttachedSessionCard key={item.id} runtimeSessionId={item.runtimeSessionId} />;
         }
         if (item.kind === "tool") {
           return <ToolCard key={item.id} label={item.label} status={item.status} />;

@@ -37,6 +37,15 @@ export function FileChangeCard(props: { files: string[] }) {
   );
 }
 
+export function AttachedSessionCard(props: { runtimeSessionId: string }) {
+  return (
+    <section className="panel stack">
+      <strong>Attached session</strong>
+      <p>{props.runtimeSessionId}</p>
+    </section>
+  );
+}
+
 export function StatusCard(props: { status: string }) {
   return (
     <section className="panel stack">

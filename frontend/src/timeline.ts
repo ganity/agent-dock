@@ -5,6 +5,7 @@ export type TimelineItem =
   | { id: string; kind: "thinking"; text: string }
   | { id: string; kind: "assistant"; text: string }
   | { id: string; kind: "file_change"; files: string[] }
+  | { id: string; kind: "attached"; runtimeSessionId: string }
   | { id: string; kind: "status"; status: string }
   | { id: string; kind: "tool"; label: string; status: "started" | "completed" };
 
@@ -59,6 +60,15 @@ export function projectTimelineEvents(events: SessionEvent[]): TimelineItem[] {
         id: `file:${event.id}`,
         kind: "file_change",
         files,
+      });
+      continue;
+    }
+
+    if (event.eventType === "session.attached") {
+      items.push({
+        id: `attached:${event.id}`,
+        kind: "attached",
+        runtimeSessionId: String(event.payload.runtimeSessionId ?? ""),
       });
       continue;
     }
