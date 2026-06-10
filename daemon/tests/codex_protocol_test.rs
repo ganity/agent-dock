@@ -1,6 +1,6 @@
 use agent_workspace_daemon::adapters::codex_protocol::{
-    build_initialize_request, build_thread_start_request, build_turn_start_request,
-    parse_notification_event,
+    build_initialize_request, build_thread_start_request, build_turn_start_request, parse_notification_event,
+    CodexSessionProtocol,
 };
 
 #[test]
@@ -40,4 +40,28 @@ fn parse_notification_event_maps_real_codex_methods() {
 
     assert_eq!(reasoning_event.event_type, "assistant.thinking.delta");
     assert_eq!(assistant_event.event_type, "assistant.message");
+}
+
+#[test]
+fn protocol_bootstraps_thread_and_flushes_queued_messages() {
+    let mut protocol = CodexSessionProtocol::new("/tmp/workspace".into());
+
+    let bootstrap = protocol.bootstrap_requests();
+    assert_eq!(bootstrap.len(), 1);
+    assert_eq!(bootstrap[0]["method"], "initialize");
+
+    let queued = protocol.enqueue_user_message("hello world".into()).unwrap();
+    assert!(queued.is_empty());
+
+    let init_response = r#"{"jsonrpc":"2.0","id":"agent-workspace-initialize-1","result":{}}"#;
+    let init_result = protocol.handle_server_line(init_response).unwrap();
+    assert_eq!(init_result.outgoing.len(), 1);
+    assert_eq!(init_result.outgoing[0]["method"], "thread/start");
+
+    let thread_response = r#"{"jsonrpc":"2.0","id":"agent-workspace-thread-start-2","result":{"thread":{"id":"thread-1"}}}"#;
+    let thread_result = protocol.handle_server_line(thread_response).unwrap();
+    assert_eq!(thread_result.outgoing.len(), 1);
+    assert_eq!(thread_result.outgoing[0]["method"], "turn/start");
+    assert_eq!(thread_result.outgoing[0]["params"]["threadId"], "thread-1");
+    assert_eq!(thread_result.outgoing[0]["params"]["input"][0]["text"], "hello world");
 }

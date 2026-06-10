@@ -1,7 +1,114 @@
+use std::collections::VecDeque;
+
 use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::session::model::StoredEvent;
+
+pub struct CodexLineResult {
+    pub outgoing: Vec<Value>,
+    pub event: Option<StoredEvent>,
+}
+
+pub struct CodexSessionProtocol {
+    cwd: String,
+    next_request_id: usize,
+    initialize_request_id: Option<String>,
+    pending_thread_start_request_id: Option<String>,
+    thread_id: Option<String>,
+    queued_messages: VecDeque<String>,
+}
+
+impl CodexSessionProtocol {
+    pub fn new(cwd: String) -> Self {
+        Self {
+            cwd,
+            next_request_id: 1,
+            initialize_request_id: None,
+            pending_thread_start_request_id: None,
+            thread_id: None,
+            queued_messages: VecDeque::new(),
+        }
+    }
+
+    pub fn bootstrap_requests(&mut self) -> Vec<Value> {
+        let request_id = self.next_id("initialize");
+        self.initialize_request_id = Some(request_id.clone());
+        vec![build_initialize_request(&request_id)]
+    }
+
+    pub fn enqueue_user_message(&mut self, message: String) -> anyhow::Result<Vec<Value>> {
+        if let Some(thread_id) = &self.thread_id {
+            return Ok(vec![self.next_turn_start_request(thread_id.clone(), message)]);
+        }
+
+        self.queued_messages.push_back(message);
+        Ok(Vec::new())
+    }
+
+    pub fn handle_server_line(&mut self, line: &str) -> anyhow::Result<CodexLineResult> {
+        if let Some(event) = parse_notification_event(line)? {
+            return Ok(CodexLineResult {
+                outgoing: Vec::new(),
+                event: Some(event),
+            });
+        }
+
+        let Some(response) = parse_response(line)? else {
+            return Ok(CodexLineResult {
+                outgoing: Vec::new(),
+                event: None,
+            });
+        };
+
+        if self.initialize_request_id.as_deref() == Some(response.id.as_str()) {
+            let request_id = self.next_id("thread-start");
+            self.pending_thread_start_request_id = Some(request_id.clone());
+            return Ok(CodexLineResult {
+                outgoing: vec![build_thread_start_request(&request_id, &self.cwd)],
+                event: None,
+            });
+        }
+
+        if self.pending_thread_start_request_id.as_deref() == Some(response.id.as_str()) {
+            let thread_id = response
+                .result
+                .get("thread")
+                .and_then(|thread| thread.get("id"))
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow::anyhow!("thread/start response missing thread.id"))?
+                .to_string();
+            self.thread_id = Some(thread_id.clone());
+            self.pending_thread_start_request_id = None;
+
+            let mut outgoing = Vec::new();
+            while let Some(message) = self.queued_messages.pop_front() {
+                outgoing.push(self.next_turn_start_request(thread_id.clone(), message));
+            }
+
+            return Ok(CodexLineResult {
+                outgoing,
+                event: None,
+            });
+        }
+
+        Ok(CodexLineResult {
+            outgoing: Vec::new(),
+            event: None,
+        })
+    }
+
+    fn next_turn_start_request(&mut self, thread_id: String, message: String) -> Value {
+        let request_id = self.next_id("turn-start");
+        build_turn_start_request(&request_id, &thread_id, &message)
+    }
+
+    fn next_id(&mut self, label: &str) -> String {
+        let id = format!("agent-workspace-{label}-{}", self.next_request_id);
+        self.next_request_id += 1;
+        id
+    }
+}
 
 pub fn build_initialize_request(request_id: &str) -> Value {
     json!({
@@ -86,5 +193,34 @@ pub fn parse_notification_event(line: &str) -> anyhow::Result<Option<StoredEvent
         id: 0,
         event_type: event_type.to_string(),
         payload_json,
+    }))
+}
+
+#[derive(Deserialize)]
+struct RpcResponseEnvelope {
+    id: Value,
+    #[serde(default)]
+    result: Value,
+}
+
+struct RpcResponse {
+    id: String,
+    result: Value,
+}
+
+fn parse_response(line: &str) -> anyhow::Result<Option<RpcResponse>> {
+    let value: Value = serde_json::from_str(line)?;
+    if value.get("method").is_some() || value.get("id").is_none() {
+        return Ok(None);
+    }
+
+    let response: RpcResponseEnvelope = serde_json::from_value(value)?;
+    let Some(id) = response.id.as_str() else {
+        return Ok(None);
+    };
+
+    Ok(Some(RpcResponse {
+        id: id.to_string(),
+        result: response.result,
     }))
 }

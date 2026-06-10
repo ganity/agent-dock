@@ -12,7 +12,7 @@ use tokio::{
 use crate::{
     adapters::{
         claude::parse_claude_stream_line,
-        codex::parse_codex_rpc_line,
+        codex_protocol::CodexSessionProtocol,
         process::{claude_managed_launch, codex_managed_launch, spawn_command, LaunchCommand},
     },
     session::{
@@ -28,6 +28,7 @@ pub struct SessionService {
     store: Arc<SqliteSessionStore>,
     process_spawner: ProcessSpawner,
     runtime_inputs: Arc<Mutex<HashMap<String, mpsc::UnboundedSender<String>>>>,
+    codex_protocols: Arc<Mutex<HashMap<String, CodexSessionProtocol>>>,
 }
 
 impl SessionService {
@@ -36,6 +37,7 @@ impl SessionService {
             store: Arc::new(store),
             process_spawner: Arc::new(spawn_command),
             runtime_inputs: Arc::new(Mutex::new(HashMap::new())),
+            codex_protocols: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -44,6 +46,7 @@ impl SessionService {
             store: Arc::new(store),
             process_spawner,
             runtime_inputs: Arc::new(Mutex::new(HashMap::new())),
+            codex_protocols: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -55,7 +58,7 @@ impl SessionService {
     ) -> anyhow::Result<String> {
         let session_id = self
             .store
-            .create_session(root_id, workspace_path, "managed".into(), agent_kind.clone())
+            .create_session(root_id, workspace_path.clone(), "managed".into(), agent_kind.clone())
             .await?;
         self.store
             .append_event(&session_id, "session.created", r#"{"status":"created"}"#)
@@ -63,11 +66,11 @@ impl SessionService {
 
         match agent_kind.as_str() {
             "claude" => {
-                self.spawn_managed_runtime(&session_id, claude_managed_launch(), parse_claude_stream_line)
+                self.spawn_stream_runtime(&session_id, claude_managed_launch(), parse_claude_stream_line)
                     .await?;
             }
             "codex" => {
-                self.spawn_managed_runtime(&session_id, codex_managed_launch(), parse_codex_rpc_line)
+                self.spawn_codex_runtime(&session_id, &workspace_path)
                     .await?;
             }
             _ => {}
@@ -102,15 +105,31 @@ impl SessionService {
             return Ok(());
         };
 
-        let payload = encode_runtime_input(&snapshot.session.agent_kind, &message);
-        sender
-            .send(payload)
-            .map_err(|_| anyhow::anyhow!("managed runtime input channel closed"))?;
+        if snapshot.session.agent_kind == "codex" {
+            let outgoing = {
+                let mut protocols = self.codex_protocols.lock().unwrap();
+                let Some(protocol) = protocols.get_mut(session_id) else {
+                    return Ok(());
+                };
+                protocol.enqueue_user_message(message)?
+            };
+
+            for request in outgoing {
+                sender
+                    .send(encode_json_line(request))
+                    .map_err(|_| anyhow::anyhow!("managed runtime input channel closed"))?;
+            }
+        } else {
+            let payload = encode_runtime_input(&snapshot.session.agent_kind, &message);
+            sender
+                .send(payload)
+                .map_err(|_| anyhow::anyhow!("managed runtime input channel closed"))?;
+        }
 
         Ok(())
     }
 
-    async fn spawn_managed_runtime(
+    async fn spawn_stream_runtime(
         &self,
         session_id: &str,
         launch_command: LaunchCommand,
@@ -178,6 +197,101 @@ impl SessionService {
 
         Ok(())
     }
+
+    async fn spawn_codex_runtime(
+        &self,
+        session_id: &str,
+        workspace_path: &str,
+    ) -> anyhow::Result<()> {
+        self.store.update_session_status(session_id, "running").await?;
+        self.store
+            .append_event(session_id, "session.status.changed", r#"{"status":"running"}"#)
+            .await?;
+
+        let mut child = (self.process_spawner)(codex_managed_launch())?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("managed codex session missing stdin"))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("managed codex session missing stdout"))?;
+        let store = self.store.clone();
+        let session_id = session_id.to_string();
+        let runtime_inputs = self.runtime_inputs.clone();
+        let codex_protocols = self.codex_protocols.clone();
+        let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+
+        let mut protocol = CodexSessionProtocol::new(workspace_path.to_string());
+        let bootstrap = protocol.bootstrap_requests();
+        codex_protocols
+            .lock()
+            .unwrap()
+            .insert(session_id.clone(), protocol);
+        runtime_inputs
+            .lock()
+            .unwrap()
+            .insert(session_id.clone(), tx.clone());
+
+        tokio::spawn(async move {
+            let mut stdin = stdin;
+            let writer = tokio::spawn(async move {
+                while let Some(message) = rx.recv().await {
+                    if stdin.write_all(message.as_bytes()).await.is_err() {
+                        break;
+                    }
+                    if stdin.flush().await.is_err() {
+                        break;
+                    }
+                }
+            });
+
+            for request in bootstrap {
+                let _ = tx.send(encode_json_line(request));
+            }
+
+            let mut lines = BufReader::new(stdout).lines();
+
+            while let Ok(Some(line)) = lines.next_line().await {
+                let result = {
+                    let mut protocols = codex_protocols.lock().unwrap();
+                    protocols
+                        .get_mut(&session_id)
+                        .map(|protocol| protocol.handle_server_line(&line))
+                };
+
+                let Some(result) = result else {
+                    continue;
+                };
+
+                match result {
+                    Ok(result) => {
+                        for request in result.outgoing {
+                            let _ = tx.send(encode_json_line(request));
+                        }
+                        if let Some(event) = result.event {
+                            let _ = store
+                                .append_event(&session_id, &event.event_type, &event.payload_json)
+                                .await;
+                        }
+                    }
+                    Err(_) => {}
+                }
+            }
+
+            let _ = writer.await;
+            let _ = child.wait().await;
+            runtime_inputs.lock().unwrap().remove(&session_id);
+            codex_protocols.lock().unwrap().remove(&session_id);
+            let _ = store.update_session_status(&session_id, "completed").await;
+            let _ = store
+                .append_event(&session_id, "session.status.changed", r#"{"status":"completed"}"#)
+                .await;
+        });
+
+        Ok(())
+    }
 }
 
 fn encode_runtime_input(agent_kind: &str, message: &str) -> String {
@@ -191,16 +305,10 @@ fn encode_runtime_input(agent_kind: &str, message: &str) -> String {
         })
         .to_string()
             + "\n",
-        "codex" => serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": "agent-workspace",
-            "method": "session/userMessage",
-            "params": {
-                "text": message,
-            }
-        })
-        .to_string()
-            + "\n",
         _ => format!("{message}\n"),
     }
+}
+
+fn encode_json_line(value: serde_json::Value) -> String {
+    value.to_string() + "\n"
 }
