@@ -1,0 +1,73 @@
+use axum::{
+    extract::State,
+    http::{header, HeaderMap, StatusCode},
+    response::IntoResponse,
+    routing::{get, post},
+    Json, Router,
+};
+use serde_json::json;
+
+use crate::{
+    app::AppState,
+    http::dto::{LoginRequest, WorkspaceRootDto},
+    workspace,
+};
+
+pub fn routes() -> Router<AppState> {
+    Router::new()
+        .route("/api/health", get(health))
+        .route("/api/auth/login", post(login))
+        .route("/api/workspaces/roots", get(workspace_roots))
+}
+
+async fn health() -> Json<serde_json::Value> {
+    Json(json!({ "ok": true }))
+}
+
+fn session_token_from_headers(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get(header::COOKIE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split("agent_workspace_session=").nth(1))
+        .and_then(|value| value.split(';').next())
+}
+
+fn is_authenticated(state: &AppState, headers: &HeaderMap) -> bool {
+    session_token_from_headers(headers).is_some_and(|value| state.auth.is_authenticated(value))
+}
+
+async fn login(
+    State(state): State<AppState>,
+    Json(request): Json<LoginRequest>,
+) -> impl IntoResponse {
+    match state.auth.login(&request.pin) {
+        Some(token) => {
+            let headers = [(
+                header::SET_COOKIE,
+                format!("agent_workspace_session={token}; Path=/; HttpOnly"),
+            )];
+            (StatusCode::OK, headers, Json(json!({ "ok": true }))).into_response()
+        }
+        None => (StatusCode::UNAUTHORIZED, Json(json!({ "error": "INVALID_PIN" }))).into_response(),
+    }
+}
+
+async fn workspace_roots(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if !is_authenticated(&state, &headers) {
+        return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "UNAUTHORIZED" }))).into_response();
+    }
+
+    let roots = workspace::list_roots(&state.config.roots)
+        .into_iter()
+        .map(|root| WorkspaceRootDto {
+            id: root.id,
+            label: root.label,
+            path: root.path,
+        })
+        .collect::<Vec<_>>();
+
+    (StatusCode::OK, Json(json!({ "roots": roots }))).into_response()
+}

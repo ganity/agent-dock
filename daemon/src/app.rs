@@ -1,14 +1,22 @@
-use axum::{routing::get, Json, Router};
-use serde_json::json;
+use axum::Router;
 
-async fn health() -> Json<serde_json::Value> {
-    Json(json!({ "ok": true }))
+use crate::{auth::AuthState, config::AppConfig, http::routes::routes};
+
+#[derive(Clone)]
+pub struct AppState {
+    pub config: AppConfig,
+    pub auth: AuthState,
 }
 
-pub fn build_router() -> Router {
-    Router::new().route("/api/health", get(health))
+pub fn build_router(config: AppConfig) -> Router {
+    let state = AppState {
+        auth: AuthState::new(config.pin.clone()),
+        config,
+    };
+
+    routes().with_state(state)
 }
 
 pub async fn build_test_router() -> Router {
-    build_router()
+    build_router(AppConfig::for_tests())
 }

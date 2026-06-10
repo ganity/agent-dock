@@ -1,0 +1,7 @@
+listen = "127.0.0.1:4123"
+pin = "1234"
+
+[[roots]]
+id = "workspace"
+label = "Workspace"
+path = "/tmp/workspace"
