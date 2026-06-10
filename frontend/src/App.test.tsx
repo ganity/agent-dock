@@ -110,4 +110,38 @@ describe("App", () => {
       expect(sendSessionMessage).toHaveBeenCalledWith("sess-1", "next step");
     });
   });
+
+  it("opens the attach form and attaches an existing session", async () => {
+    render(<App />);
+
+    fireEvent.change(screen.getByLabelText("PIN"), { target: { value: "1234" } });
+    fireEvent.click(screen.getByRole("button", { name: "Unlock" }));
+
+    await waitFor(() => {
+      expect(login).toHaveBeenCalledWith("1234");
+      expect(listRoots).toHaveBeenCalledTimes(1);
+      expect(listSessions).toHaveBeenCalledTimes(1);
+    });
+
+    expect(screen.queryByLabelText("Runtime session ID")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Attach session" }));
+
+    fireEvent.change(screen.getByLabelText("Agent"), { target: { value: "claude" } });
+    fireEvent.change(screen.getByLabelText("Runtime session ID"), { target: { value: "thread-abc" } });
+    fireEvent.change(screen.getByLabelText("Path"), { target: { value: "apps/web" } });
+    fireEvent.click(screen.getAllByRole("button", { name: "Attach session" })[1]!);
+
+    await waitFor(() => {
+      expect(attachSession).toHaveBeenCalledWith({
+        rootId: "workspace",
+        path: "apps/web",
+        agentKind: "claude",
+        runtimeSessionId: "thread-abc",
+      });
+    });
+
+    expect(await screen.findByText("Session details")).toBeInTheDocument();
+    expect(screen.getByText("claude")).toBeInTheDocument();
+    expect(connectEventStream).toHaveBeenCalledWith("sess-2", 1);
+  });
 });
