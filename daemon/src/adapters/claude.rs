@@ -55,3 +55,19 @@ pub fn parse_claude_stream_line(line: &str) -> anyhow::Result<Option<StoredEvent
         payload_json,
     }))
 }
+
+#[derive(Deserialize)]
+struct ClaudeResultEnvelope {
+    #[serde(rename = "type")]
+    kind: String,
+    session_id: Option<String>,
+}
+
+pub fn parse_claude_result_session_id(line: &str) -> anyhow::Result<Option<String>> {
+    let envelope: ClaudeResultEnvelope = serde_json::from_str(line)?;
+    if envelope.kind != "result" {
+        return Ok(None);
+    }
+
+    Ok(envelope.session_id)
+}

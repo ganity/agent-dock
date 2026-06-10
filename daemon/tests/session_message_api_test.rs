@@ -16,7 +16,9 @@ async fn posting_session_message_persists_user_event_and_runtime_reply() {
             program: "sh".into(),
             args: vec![
                 "-lc".into(),
-                "while IFS= read -r _line; do printf '%s\n' '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"reply\"}]}}'; done".into(),
+                "printf '%s\n%s\n' \
+                 '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"reply\"}]}}' \
+                 '{\"type\":\"result\",\"session_id\":\"claude-thread-1\",\"result\":\"reply\"}'".into(),
             ],
         })
     }))

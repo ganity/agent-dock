@@ -24,8 +24,8 @@ impl SqliteSessionStore {
         let id = format!("sess_{}", Uuid::new_v4());
 
         sqlx::query(
-            "insert into sessions (id, root_id, workspace_path, source_kind, agent_kind, status, created_at, updated_at)
-             values (?1, ?2, ?3, ?4, ?5, 'created', datetime('now'), datetime('now'))",
+            "insert into sessions (id, root_id, workspace_path, source_kind, agent_kind, runtime_session_id, status, created_at, updated_at)
+             values (?1, ?2, ?3, ?4, ?5, null, 'created', datetime('now'), datetime('now'))",
         )
         .bind(&id)
         .bind(root_id)
@@ -118,9 +118,27 @@ impl SqliteSessionStore {
         Ok(())
     }
 
+    pub async fn update_runtime_session_id(
+        &self,
+        session_id: &str,
+        runtime_session_id: &str,
+    ) -> anyhow::Result<()> {
+        sqlx::query(
+            "update sessions
+             set runtime_session_id = ?2, updated_at = datetime('now')
+             where id = ?1",
+        )
+        .bind(session_id)
+        .bind(runtime_session_id)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
     pub async fn load_snapshot(&self, session_id: &str) -> anyhow::Result<SessionSnapshot> {
         let session_row = sqlx::query(
-            "select id, root_id, workspace_path, source_kind, agent_kind, status
+            "select id, root_id, workspace_path, source_kind, agent_kind, runtime_session_id, status
              from sessions
              where id = ?1",
         )
@@ -134,6 +152,7 @@ impl SqliteSessionStore {
             workspace_path: session_row.get("workspace_path"),
             source_kind: session_row.get("source_kind"),
             agent_kind: session_row.get("agent_kind"),
+            runtime_session_id: session_row.get("runtime_session_id"),
             status: session_row.get("status"),
         };
 

@@ -81,14 +81,35 @@ async fn websocket_stream_replays_events_after_cursor() {
 
     assert!(text.contains("\"eventType\":\"session.created\""));
 
+    let send = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/sessions/{session_id}/messages"))
+                .header("content-type", "application/json")
+                .header("cookie", login.headers().get("set-cookie").unwrap())
+                .body(Body::from(r#"{"message":"hello"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(send.status(), axum::http::StatusCode::OK);
+
     let second = socket.next().await.unwrap().unwrap();
     let second_text = second.into_text().unwrap();
 
-    assert!(second_text.contains("\"eventType\":\"session.status.changed\""));
+    assert!(second_text.contains("\"eventType\":\"user.message\""));
 
     let third = socket.next().await.unwrap().unwrap();
     let third_text = third.into_text().unwrap();
 
-    assert!(third_text.contains("\"eventType\":\"assistant.message\""));
-    assert!(third_text.contains("\"later\""));
+    assert!(third_text.contains("\"eventType\":\"session.status.changed\""));
+
+    let fourth = socket.next().await.unwrap().unwrap();
+    let fourth_text = fourth.into_text().unwrap();
+
+    assert!(fourth_text.contains("\"eventType\":\"assistant.message\""));
+    assert!(fourth_text.contains("\"later\""));
 }

@@ -11,9 +11,9 @@ use tokio::{
 
 use crate::{
     adapters::{
-        claude::parse_claude_stream_line,
+        claude::{parse_claude_result_session_id, parse_claude_stream_line},
         codex_protocol::CodexSessionProtocol,
-        process::{claude_managed_launch, codex_managed_launch, spawn_command, LaunchCommand},
+        process::{claude_turn_launch, codex_managed_launch, spawn_command, LaunchCommand},
     },
     session::{
         model::{SessionSnapshot, SessionSummary, StoredEvent},
@@ -65,10 +65,7 @@ impl SessionService {
             .await?;
 
         match agent_kind.as_str() {
-            "claude" => {
-                self.spawn_stream_runtime(&session_id, claude_managed_launch(), parse_claude_stream_line)
-                    .await?;
-            }
+            "claude" => {}
             "codex" => {
                 self.spawn_codex_runtime(&session_id, &workspace_path)
                     .await?;
@@ -101,6 +98,16 @@ impl SessionService {
             )
             .await?;
 
+        if snapshot.session.agent_kind == "claude" {
+            self.spawn_claude_turn(
+                session_id,
+                message,
+                snapshot.session.runtime_session_id.clone(),
+            )
+            .await?;
+            return Ok(());
+        }
+
         let Some(sender) = self.runtime_inputs.lock().unwrap().get(session_id).cloned() else {
             return Ok(());
         };
@@ -129,53 +136,38 @@ impl SessionService {
         Ok(())
     }
 
-    async fn spawn_stream_runtime(
+    async fn spawn_claude_turn(
         &self,
         session_id: &str,
-        launch_command: LaunchCommand,
-        parser: fn(&str) -> anyhow::Result<Option<StoredEvent>>,
+        message: String,
+        runtime_session_id: Option<String>,
     ) -> anyhow::Result<()> {
         self.store.update_session_status(session_id, "running").await?;
         self.store
             .append_event(session_id, "session.status.changed", r#"{"status":"running"}"#)
             .await?;
 
+        let launch_command = claude_turn_launch(&message, runtime_session_id.as_deref());
         let mut child = (self.process_spawner)(launch_command)?;
-        let stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| anyhow::anyhow!("managed session missing stdin"))?;
         let stdout = child
             .stdout
             .take()
             .ok_or_else(|| anyhow::anyhow!("managed session missing stdout"))?;
         let store = self.store.clone();
         let session_id = session_id.to_string();
-        let runtime_inputs = self.runtime_inputs.clone();
-        let (tx, mut rx) = mpsc::unbounded_channel::<String>();
-
-        runtime_inputs
-            .lock()
-            .unwrap()
-            .insert(session_id.clone(), tx);
+        let runtime_session_id_store = self.store.clone();
 
         tokio::spawn(async move {
-            let mut stdin = stdin;
-            let writer = tokio::spawn(async move {
-                while let Some(message) = rx.recv().await {
-                    if stdin.write_all(message.as_bytes()).await.is_err() {
-                        break;
-                    }
-                    if stdin.flush().await.is_err() {
-                        break;
-                    }
-                }
-            });
-
             let mut lines = BufReader::new(stdout).lines();
 
             while let Ok(Some(line)) = lines.next_line().await {
-                match parser(&line) {
+                if let Ok(Some(runtime_session_id)) = parse_claude_result_session_id(&line) {
+                    let _ = runtime_session_id_store
+                        .update_runtime_session_id(&session_id, &runtime_session_id)
+                        .await;
+                }
+
+                match parse_claude_stream_line(&line) {
                     Ok(Some(event)) => {
                         let _ = store
                             .append_event(&session_id, &event.event_type, &event.payload_json)
@@ -186,9 +178,7 @@ impl SessionService {
                 }
             }
 
-            let _ = writer.await;
             let _ = child.wait().await;
-            runtime_inputs.lock().unwrap().remove(&session_id);
             let _ = store.update_session_status(&session_id, "completed").await;
             let _ = store
                 .append_event(&session_id, "session.status.changed", r#"{"status":"completed"}"#)
@@ -296,15 +286,6 @@ impl SessionService {
 
 fn encode_runtime_input(agent_kind: &str, message: &str) -> String {
     match agent_kind {
-        "claude" => serde_json::json!({
-            "type": "user",
-            "message": {
-                "role": "user",
-                "content": message,
-            }
-        })
-        .to_string()
-            + "\n",
         _ => format!("{message}\n"),
     }
 }

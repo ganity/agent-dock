@@ -8,12 +8,18 @@ use agent_workspace_daemon::{
 #[tokio::test]
 async fn managed_claude_session_appends_parsed_events_from_process_output() {
     let store = SqliteSessionStore::in_memory().await.unwrap();
-    let spawner = Arc::new(|_command: LaunchCommand| {
+    let recorded = Arc::new(std::sync::Mutex::new(Vec::<LaunchCommand>::new()));
+    let recorded_for_spawner = recorded.clone();
+    let spawner = Arc::new(move |command: LaunchCommand| {
+        recorded_for_spawner.lock().unwrap().push(command);
         spawn_command(LaunchCommand {
             program: "sh".into(),
             args: vec![
                 "-lc".into(),
-                "printf '%s\n%s\n' '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"thinking\",\"thinking\":\"plan first\"}]}}' '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"done\"}]}}'".into(),
+                "printf '%s\n%s\n%s\n' \
+                 '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"thinking\",\"thinking\":\"plan first\"}]}}' \
+                 '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"done\"}]}}' \
+                 '{\"type\":\"result\",\"session_id\":\"claude-thread-1\",\"result\":\"done\"}'".into(),
             ],
         })
     });
@@ -21,6 +27,11 @@ async fn managed_claude_session_appends_parsed_events_from_process_output() {
     let service = SessionService::new_with_spawner(store, spawner);
     let session_id = service
         .create_managed_session("workspace".into(), "repo".into(), "claude".into())
+        .await
+        .unwrap();
+
+    service
+        .send_user_message(&session_id, "hello from user".into())
         .await
         .unwrap();
 
@@ -40,6 +51,20 @@ async fn managed_claude_session_appends_parsed_events_from_process_output() {
             .iter()
             .any(|event| event.event_type == "assistant.message")
     );
+    assert_eq!(snapshot.session.runtime_session_id.as_deref(), Some("claude-thread-1"));
+
+    service
+        .send_user_message(&session_id, "follow up".into())
+        .await
+        .unwrap();
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let launches = recorded.lock().unwrap();
+    assert_eq!(launches.len(), 2);
+    assert!(!launches[0].args.iter().any(|arg| arg == "--resume"));
+    assert!(launches[1].args.iter().any(|arg| arg == "--resume"));
+    assert!(launches[1].args.iter().any(|arg| arg == "claude-thread-1"));
 }
 
 #[tokio::test]

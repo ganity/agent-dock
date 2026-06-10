@@ -9,16 +9,30 @@ pub struct LaunchCommand {
 }
 
 pub fn claude_managed_launch() -> LaunchCommand {
+    claude_turn_launch("", None)
+}
+
+pub fn claude_turn_launch(message: &str, resume_session_id: Option<&str>) -> LaunchCommand {
+    let mut args = vec![
+        "--print".into(),
+        "--bare".into(),
+        "--verbose".into(),
+        "--output-format".into(),
+        "stream-json".into(),
+    ];
+
+    if let Some(session_id) = resume_session_id {
+        args.push("--resume".into());
+        args.push(session_id.to_string());
+    }
+
+    if !message.is_empty() {
+        args.push(message.to_string());
+    }
+
     LaunchCommand {
         program: "claude".into(),
-        args: vec![
-            "--print".into(),
-            "--verbose".into(),
-            "--output-format".into(),
-            "stream-json".into(),
-            "--input-format".into(),
-            "stream-json".into(),
-        ],
+        args,
     }
 }
 

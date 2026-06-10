@@ -4,6 +4,7 @@ create table sessions (
   workspace_path text not null,
   source_kind text not null,
   agent_kind text not null,
+  runtime_session_id text,
   status text not null,
   created_at text not null,
   updated_at text not null
