@@ -62,6 +62,8 @@ describe("App", () => {
       expect(listSessions).toHaveBeenCalledTimes(1);
     });
 
+    expect(screen.queryByLabelText("Agent")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "New session" }));
     fireEvent.change(screen.getByLabelText("Agent"), { target: { value: "codex" } });
     fireEvent.change(screen.getByLabelText("Path"), { target: { value: "apps/api" } });
     fireEvent.click(screen.getByRole("button", { name: "Create session" }));

@@ -20,6 +20,7 @@ export default function App() {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [selectedSession, setSelectedSession] = useState<SessionDetail | null>(null);
   const [loginError, setLoginError] = useState<string | null>(null);
+  const [showCreateForm, setShowCreateForm] = useState(false);
 
   async function refreshSessions(): Promise<void> {
     setSessions(await listSessions());
@@ -66,7 +67,7 @@ export default function App() {
           <section className="stack">
             <SessionListView
               sessions={sessions}
-              onCreate={() => {}}
+              onCreate={() => setShowCreateForm(true)}
               onSelect={(sessionId) => {
                 void (async () => {
                   const detail = await fetchSessionSnapshot(sessionId);
@@ -74,16 +75,19 @@ export default function App() {
                 })();
               }}
             />
-            <CreateSessionView
-              roots={roots}
-              onSubmit={(input) => {
-                void (async () => {
-                  const created = await createSession(input);
-                  setSessions((current) => [...current, created]);
-                  setSelectedSession(created);
-                })();
-              }}
-            />
+            {showCreateForm ? (
+              <CreateSessionView
+                roots={roots}
+                onSubmit={(input) => {
+                  void (async () => {
+                    const created = await createSession(input);
+                    setSessions((current) => [...current, created]);
+                    setShowCreateForm(false);
+                    setSelectedSession(created);
+                  })();
+                }}
+              />
+            ) : null}
           </section>
         )
       ) : (
