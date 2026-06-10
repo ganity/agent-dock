@@ -1,6 +1,8 @@
 export interface SessionSummary {
   id: string;
   agentKind: string;
+  sourceKind?: string;
+  runtimeSessionId?: string;
   status?: string;
   workspacePath?: string;
 }
@@ -33,5 +35,7 @@ export interface SessionEvent {
 export interface SessionDetail {
   id: string;
   agentKind: string;
+  sourceKind?: string;
+  runtimeSessionId?: string;
   events: SessionEvent[];
 }

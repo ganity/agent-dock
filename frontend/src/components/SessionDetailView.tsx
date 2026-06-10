@@ -26,6 +26,8 @@ export function SessionDetailView(props: {
         </button>
         <h1>{props.session.agentKind}</h1>
         <p className="muted">Session details</p>
+        {props.session.sourceKind ? <p>{props.session.sourceKind}</p> : null}
+        {props.session.runtimeSessionId ? <p>{props.session.runtimeSessionId}</p> : null}
       </section>
       {items.map((item) => {
         if (item.kind === "user") {

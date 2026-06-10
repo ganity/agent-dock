@@ -75,7 +75,7 @@ impl SqliteSessionStore {
 
     pub async fn list_sessions(&self) -> anyhow::Result<Vec<SessionSummary>> {
         let rows = sqlx::query(
-            "select id, workspace_path, source_kind, agent_kind, status
+            "select id, workspace_path, source_kind, agent_kind, runtime_session_id, status
              from sessions
              order by updated_at desc, id desc",
         )
@@ -89,6 +89,7 @@ impl SqliteSessionStore {
                 workspace_path: row.get("workspace_path"),
                 source_kind: row.get("source_kind"),
                 agent_kind: row.get("agent_kind"),
+                runtime_session_id: row.get("runtime_session_id"),
                 status: row.get("status"),
             })
             .collect())

@@ -24,8 +24,10 @@ export function SessionListView(props: {
         {props.sessions.map((session) => (
           <li key={session.id} className="panel stack">
             <strong>{session.agentKind}</strong>
+            {session.sourceKind ? <p>{session.sourceKind}</p> : null}
             {session.status ? <p>{session.status}</p> : null}
             {session.workspacePath ? <p>{session.workspacePath}</p> : null}
+            {session.runtimeSessionId ? <p>{session.runtimeSessionId}</p> : null}
             <button className="button" type="button" onClick={() => props.onSelect(session.id)}>
               {`Open ${session.agentKind}`}
             </button>

@@ -22,6 +22,7 @@ pub struct SessionSummary {
     pub workspace_path: String,
     pub source_kind: String,
     pub agent_kind: String,
+    pub runtime_session_id: Option<String>,
     pub status: String,
 }
 

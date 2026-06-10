@@ -11,7 +11,14 @@ describe("SessionListView", () => {
 
         render(
             <SessionListView
-                sessions={[{ id: "sess-1", agentKind: "codex", status: "running", workspacePath: "apps/api" }]}
+                sessions={[{
+                    id: "sess-1",
+                    agentKind: "codex",
+                    status: "running",
+                    workspacePath: "apps/api",
+                    sourceKind: "attached",
+                    runtimeSessionId: "thread-abc",
+                }]}
                 onCreate={onCreate}
                 onAttach={onAttach}
                 onSelect={onSelect}
@@ -21,6 +28,8 @@ describe("SessionListView", () => {
         expect(screen.getByText("codex")).toBeInTheDocument();
         expect(screen.getByText("running")).toBeInTheDocument();
         expect(screen.getByText("apps/api")).toBeInTheDocument();
+        expect(screen.getByText("attached")).toBeInTheDocument();
+        expect(screen.getByText("thread-abc")).toBeInTheDocument();
 
         fireEvent.click(screen.getByRole("button", { name: "New session" }));
         expect(onCreate).toHaveBeenCalledTimes(1);

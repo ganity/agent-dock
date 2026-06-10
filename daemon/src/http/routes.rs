@@ -145,6 +145,8 @@ async fn list_sessions(
         .map(|session| SessionSummaryDto {
             id: session.id,
             agent_kind: session.agent_kind,
+            source_kind: session.source_kind,
+            runtime_session_id: session.runtime_session_id,
             status: session.status,
             workspace_path: session.workspace_path,
         })
@@ -243,6 +245,8 @@ fn snapshot_to_dto(snapshot: crate::session::model::SessionSnapshot) -> SessionS
     SessionSnapshotDto {
         id: snapshot.session.id,
         agent_kind: snapshot.session.agent_kind,
+        source_kind: snapshot.session.source_kind,
+        runtime_session_id: snapshot.session.runtime_session_id,
         events: snapshot
             .events
             .into_iter()

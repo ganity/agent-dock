@@ -50,6 +50,10 @@ pub struct SessionSnapshotDto {
     pub id: String,
     #[serde(rename = "agentKind")]
     pub agent_kind: String,
+    #[serde(rename = "sourceKind")]
+    pub source_kind: String,
+    #[serde(rename = "runtimeSessionId")]
+    pub runtime_session_id: Option<String>,
     pub events: Vec<SessionEventDto>,
 }
 
@@ -58,6 +62,10 @@ pub struct SessionSummaryDto {
     pub id: String,
     #[serde(rename = "agentKind")]
     pub agent_kind: String,
+    #[serde(rename = "sourceKind")]
+    pub source_kind: String,
+    #[serde(rename = "runtimeSessionId")]
+    pub runtime_session_id: Option<String>,
     pub status: String,
     #[serde(rename = "workspacePath")]
     pub workspace_path: String,
