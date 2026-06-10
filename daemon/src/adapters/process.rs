@@ -16,3 +16,10 @@ pub fn claude_managed_launch() -> LaunchCommand {
         ],
     }
 }
+
+pub fn codex_managed_launch() -> LaunchCommand {
+    LaunchCommand {
+        program: "codex".into(),
+        args: vec!["app-server".into(), "--stdio".into()],
+    }
+}

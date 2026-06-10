@@ -1,0 +1,2 @@
+{"jsonrpc":"2.0","method":"session/message","params":{"text":"applied fix"}}
+{"jsonrpc":"2.0","method":"session/fileChangeReported","params":{"files":["src/app.rs"]}}
