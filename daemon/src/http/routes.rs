@@ -10,8 +10,8 @@ use serde_json::json;
 use crate::{
     app::AppState,
     http::dto::{
-        CreateSessionRequest, LoginRequest, SendMessageRequest, SessionEventDto, SessionSnapshotDto,
-        SessionSummaryDto, WorkspaceRootDto,
+        AttachSessionRequest, CreateSessionRequest, LoginRequest, SendMessageRequest, SessionEventDto,
+        SessionSnapshotDto, SessionSummaryDto, WorkspaceRootDto,
     },
     http::ws::stream_session_events,
     workspace,
@@ -23,6 +23,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/auth/login", post(login))
         .route("/api/workspaces/roots", get(workspace_roots))
         .route("/api/sessions", post(create_session).get(list_sessions))
+        .route("/api/sessions/attach", post(attach_session))
         .route("/api/sessions/{id}", get(get_session))
         .route("/api/sessions/{id}/messages", post(send_session_message))
         .route("/ws/sessions/{id}/events", get(stream_session_events))
@@ -150,6 +151,49 @@ async fn list_sessions(
         .collect::<Vec<_>>();
 
     (StatusCode::OK, Json(json!({ "sessions": response }))).into_response()
+}
+
+async fn attach_session(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<AttachSessionRequest>,
+) -> impl IntoResponse {
+    if !is_authenticated(&state, &headers) {
+        return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "UNAUTHORIZED" }))).into_response();
+    }
+
+    let session_id = match state
+        .sessions
+        .attach_existing_session(
+            request.root_id,
+            request.path,
+            request.agent_kind,
+            request.runtime_session_id,
+        )
+        .await
+    {
+        Ok(value) => value,
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": error.to_string() })),
+            )
+                .into_response();
+        }
+    };
+
+    let snapshot = match state.sessions.load_snapshot(&session_id).await {
+        Ok(value) => value,
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": error.to_string() })),
+            )
+                .into_response();
+        }
+    };
+
+    (StatusCode::OK, Json(snapshot_to_dto(snapshot))).into_response()
 }
 
 async fn get_session(

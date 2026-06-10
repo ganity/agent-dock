@@ -17,6 +17,13 @@ export interface CreateSessionInput {
   agentKind: string;
 }
 
+export interface AttachSessionInput {
+  rootId: string;
+  path: string;
+  agentKind: string;
+  runtimeSessionId: string;
+}
+
 export interface SessionEvent {
   id: number;
   eventType: string;

@@ -76,6 +76,31 @@ impl SessionService {
         Ok(session_id)
     }
 
+    pub async fn attach_existing_session(
+        &self,
+        root_id: String,
+        workspace_path: String,
+        agent_kind: String,
+        runtime_session_id: String,
+    ) -> anyhow::Result<String> {
+        let session_id = self
+            .store
+            .create_session(root_id, workspace_path, "attached".into(), agent_kind)
+            .await?;
+        self.store
+            .update_runtime_session_id(&session_id, &runtime_session_id)
+            .await?;
+        self.store
+            .append_event(
+                &session_id,
+                "session.attached",
+                &serde_json::json!({ "runtimeSessionId": runtime_session_id }).to_string(),
+            )
+            .await?;
+
+        Ok(session_id)
+    }
+
     pub async fn load_snapshot(&self, session_id: &str) -> anyhow::Result<SessionSnapshot> {
         self.store.load_snapshot(session_id).await
     }

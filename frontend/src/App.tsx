@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import {
+  attachSession,
   connectEventStream,
   createSession,
   fetchSessionSnapshot,
@@ -8,6 +9,7 @@ import {
   login,
   sendSessionMessage,
 } from "./api";
+import { AttachSessionView } from "./components/AttachSessionView";
 import { CreateSessionView } from "./components/CreateSessionView";
 import { LoginView } from "./components/LoginView";
 import { SessionDetailView } from "./components/SessionDetailView";
@@ -21,6 +23,7 @@ export default function App() {
   const [selectedSession, setSelectedSession] = useState<SessionDetail | null>(null);
   const [loginError, setLoginError] = useState<string | null>(null);
   const [showCreateForm, setShowCreateForm] = useState(false);
+  const [showAttachForm, setShowAttachForm] = useState(false);
 
   async function refreshSessions(): Promise<void> {
     setSessions(await listSessions());
@@ -67,7 +70,14 @@ export default function App() {
           <section className="stack">
             <SessionListView
               sessions={sessions}
-              onCreate={() => setShowCreateForm(true)}
+              onCreate={() => {
+                setShowAttachForm(false);
+                setShowCreateForm(true);
+              }}
+              onAttach={() => {
+                setShowCreateForm(false);
+                setShowAttachForm(true);
+              }}
               onSelect={(sessionId) => {
                 void (async () => {
                   const detail = await fetchSessionSnapshot(sessionId);
@@ -84,6 +94,19 @@ export default function App() {
                     setSessions((current) => [...current, created]);
                     setShowCreateForm(false);
                     setSelectedSession(created);
+                  })();
+                }}
+              />
+            ) : null}
+            {showAttachForm ? (
+              <AttachSessionView
+                roots={roots}
+                onSubmit={(input) => {
+                  void (async () => {
+                    const attached = await attachSession(input);
+                    setSessions((current) => [...current, attached]);
+                    setShowAttachForm(false);
+                    setSelectedSession(attached);
                   })();
                 }}
               />

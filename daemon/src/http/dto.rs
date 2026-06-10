@@ -19,6 +19,17 @@ pub struct SendMessageRequest {
     pub message: String,
 }
 
+#[derive(Deserialize)]
+pub struct AttachSessionRequest {
+    #[serde(rename = "rootId")]
+    pub root_id: String,
+    pub path: String,
+    #[serde(rename = "agentKind")]
+    pub agent_kind: String,
+    #[serde(rename = "runtimeSessionId")]
+    pub runtime_session_id: String,
+}
+
 #[derive(Serialize)]
 pub struct WorkspaceRootDto {
     pub id: String,

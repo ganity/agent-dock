@@ -1,4 +1,10 @@
-import type { CreateSessionInput, SessionDetail, SessionSummary, WorkspaceRoot } from "./types";
+import type {
+  AttachSessionInput,
+  CreateSessionInput,
+  SessionDetail,
+  SessionSummary,
+  WorkspaceRoot,
+} from "./types";
 
 export async function login(pin: string): Promise<void> {
   const response = await fetch("/api/auth/login", {
@@ -41,6 +47,20 @@ export async function createSession(input: CreateSessionInput): Promise<SessionD
 
   if (!response.ok) {
     throw new Error("Failed to create session");
+  }
+
+  return (await response.json()) as SessionDetail;
+}
+
+export async function attachSession(input: AttachSessionInput): Promise<SessionDetail> {
+  const response = await fetch("/api/sessions/attach", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+
+  if (!response.ok) {
+    throw new Error("Failed to attach session");
   }
 
   return (await response.json()) as SessionDetail;

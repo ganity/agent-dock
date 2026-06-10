@@ -12,6 +12,11 @@ const liveSocket = vi.hoisted(() => {
 });
 
 vi.mock("./api", () => ({
+  attachSession: vi.fn().mockResolvedValue({
+    id: "sess-2",
+    agentKind: "claude",
+    events: [{ id: 1, eventType: "assistant.message", payload: { text: "attached" } }],
+  }),
   login: vi.fn().mockResolvedValue(undefined),
   listRoots: vi.fn().mockResolvedValue([{ id: "workspace", label: "Workspace", path: "/tmp/workspace" }]),
   listSessions: vi.fn().mockResolvedValue([]),
@@ -27,6 +32,7 @@ vi.mock("./api", () => ({
 
 import App from "./App";
 import {
+  attachSession,
   connectEventStream,
   createSession,
   listRoots,
@@ -44,6 +50,11 @@ afterEach(() => {
     id: "sess-1",
     agentKind: "codex",
     events: [{ id: 1, eventType: "assistant.message", payload: { text: "done" } }],
+  });
+  vi.mocked(attachSession).mockResolvedValue({
+    id: "sess-2",
+    agentKind: "claude",
+    events: [{ id: 1, eventType: "assistant.message", payload: { text: "attached" } }],
   });
   liveSocket.onmessage = null;
   liveSocket.onerror = null;

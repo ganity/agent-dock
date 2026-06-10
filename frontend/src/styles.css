@@ -17,7 +17,9 @@ body {
 }
 
 button,
-input {
+input,
+textarea,
+select {
   font: inherit;
 }
 
@@ -68,4 +70,19 @@ input {
 
 .muted {
   color: #a0afca;
+}
+
+@media (max-width: 720px) {
+  .shell {
+    padding: 16px;
+  }
+
+  .panel {
+    padding: 16px;
+    border-radius: 16px;
+  }
+
+  .stack {
+    gap: 12px;
+  }
 }

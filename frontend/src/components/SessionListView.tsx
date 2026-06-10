@@ -3,6 +3,7 @@ import type { SessionSummary } from "../types";
 export function SessionListView(props: {
   sessions: SessionSummary[];
   onCreate: () => void;
+  onAttach: () => void;
   onSelect: (sessionId: string) => void;
 }) {
   return (
@@ -11,9 +12,14 @@ export function SessionListView(props: {
         <h1>Sessions</h1>
         <p className="muted">Structured managed sessions backed by the local daemon.</p>
       </div>
-      <button className="button" type="button" onClick={props.onCreate}>
-        New session
-      </button>
+      <div className="stack">
+        <button className="button" type="button" onClick={props.onCreate}>
+          New session
+        </button>
+        <button className="button" type="button" onClick={props.onAttach}>
+          Attach session
+        </button>
+      </div>
       <ul>
         {props.sessions.map((session) => (
           <li key={session.id} className="panel stack">

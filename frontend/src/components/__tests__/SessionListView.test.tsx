@@ -6,12 +6,14 @@ import { SessionListView } from "../SessionListView";
 describe("SessionListView", () => {
     it("renders session metadata and exposes the create action", () => {
         const onCreate = vi.fn();
+        const onAttach = vi.fn();
         const onSelect = vi.fn();
 
         render(
             <SessionListView
                 sessions={[{ id: "sess-1", agentKind: "codex", status: "running", workspacePath: "apps/api" }]}
                 onCreate={onCreate}
+                onAttach={onAttach}
                 onSelect={onSelect}
             />,
         );
@@ -22,6 +24,9 @@ describe("SessionListView", () => {
 
         fireEvent.click(screen.getByRole("button", { name: "New session" }));
         expect(onCreate).toHaveBeenCalledTimes(1);
+
+        fireEvent.click(screen.getByRole("button", { name: "Attach session" }));
+        expect(onAttach).toHaveBeenCalledTimes(1);
 
         fireEvent.click(screen.getByRole("button", { name: "Open codex" }));
         expect(onSelect).toHaveBeenCalledWith("sess-1");
