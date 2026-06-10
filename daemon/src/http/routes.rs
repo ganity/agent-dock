@@ -1,5 +1,5 @@
 use axum::{
-    extract::State,
+    extract::{Path, State},
     http::{header, HeaderMap, StatusCode},
     response::IntoResponse,
     routing::{get, post},
@@ -22,6 +22,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/auth/login", post(login))
         .route("/api/workspaces/roots", get(workspace_roots))
         .route("/api/sessions", post(create_session).get(list_sessions))
+        .route("/api/sessions/{id}", get(get_session))
 }
 
 async fn health() -> Json<serde_json::Value> {
@@ -111,19 +112,7 @@ async fn create_session(
         }
     };
 
-    let response = SessionSnapshotDto {
-        id: snapshot.session.id,
-        agent_kind: snapshot.session.agent_kind,
-        events: snapshot
-            .events
-            .into_iter()
-            .map(|event| SessionEventDto {
-                id: event.id,
-                event_type: event.event_type,
-                payload: serde_json::from_str(&event.payload_json).unwrap(),
-            })
-            .collect(),
-    };
+    let response = snapshot_to_dto(snapshot);
 
     (StatusCode::OK, Json(response)).into_response()
 }
@@ -158,4 +147,43 @@ async fn list_sessions(
         .collect::<Vec<_>>();
 
     (StatusCode::OK, Json(json!({ "sessions": response }))).into_response()
+}
+
+async fn get_session(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(session_id): Path<String>,
+) -> impl IntoResponse {
+    if !is_authenticated(&state, &headers) {
+        return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "UNAUTHORIZED" }))).into_response();
+    }
+
+    let snapshot = match state.sessions.load_snapshot(&session_id).await {
+        Ok(value) => value,
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": error.to_string() })),
+            )
+                .into_response();
+        }
+    };
+
+    (StatusCode::OK, Json(snapshot_to_dto(snapshot))).into_response()
+}
+
+fn snapshot_to_dto(snapshot: crate::session::model::SessionSnapshot) -> SessionSnapshotDto {
+    SessionSnapshotDto {
+        id: snapshot.session.id,
+        agent_kind: snapshot.session.agent_kind,
+        events: snapshot
+            .events
+            .into_iter()
+            .map(|event| SessionEventDto {
+                id: event.id,
+                event_type: event.event_type,
+                payload: serde_json::from_str(&event.payload_json).unwrap(),
+            })
+            .collect(),
+    }
 }

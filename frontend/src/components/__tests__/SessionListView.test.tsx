@@ -11,6 +11,7 @@ describe("SessionListView", () => {
             <SessionListView
                 sessions={[{ id: "sess-1", agentKind: "placeholder" }]}
                 onCreate={onCreate}
+                onSelect={() => {}}
             />,
         );
 

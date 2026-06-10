@@ -7,7 +7,9 @@ vi.mock("./api", () => ({
   createSession: vi.fn().mockResolvedValue({
     id: "sess-1",
     agentKind: "claude",
+    events: [{ id: 1, eventType: "assistant.message", payload: { text: "done" } }],
   }),
+  fetchSessionSnapshot: vi.fn(),
 }));
 
 import App from "./App";
@@ -17,7 +19,11 @@ afterEach(() => {
   cleanup();
   vi.clearAllMocks();
   vi.mocked(listSessions).mockResolvedValue([]);
-  vi.mocked(createSession).mockResolvedValue({ id: "sess-1", agentKind: "claude" });
+  vi.mocked(createSession).mockResolvedValue({
+    id: "sess-1",
+    agentKind: "claude",
+    events: [{ id: 1, eventType: "assistant.message", payload: { text: "done" } }],
+  });
 });
 
 describe("App", () => {
@@ -42,6 +48,7 @@ describe("App", () => {
       });
     });
 
-    expect(await screen.findByText("claude")).toBeInTheDocument();
+    expect(await screen.findByText("Session details")).toBeInTheDocument();
+    expect(screen.getByText("claude")).toBeInTheDocument();
   });
 });

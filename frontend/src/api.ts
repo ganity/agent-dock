@@ -1,4 +1,4 @@
-import type { CreateSessionInput, SessionSummary, WorkspaceRoot } from "./types";
+import type { CreateSessionInput, SessionDetail, SessionSummary, WorkspaceRoot } from "./types";
 
 export async function login(pin: string): Promise<void> {
   const response = await fetch("/api/auth/login", {
@@ -32,7 +32,7 @@ export async function listSessions(): Promise<SessionSummary[]> {
   return data.sessions;
 }
 
-export async function createSession(input: CreateSessionInput): Promise<SessionSummary> {
+export async function createSession(input: CreateSessionInput): Promise<SessionDetail> {
   const response = await fetch("/api/sessions", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -43,9 +43,14 @@ export async function createSession(input: CreateSessionInput): Promise<SessionS
     throw new Error("Failed to create session");
   }
 
-  const data = (await response.json()) as SessionSummary;
-  return {
-    id: data.id,
-    agentKind: data.agentKind,
-  };
+  return (await response.json()) as SessionDetail;
+}
+
+export async function fetchSessionSnapshot(id: string): Promise<SessionDetail> {
+  const response = await fetch(`/api/sessions/${id}`);
+  if (!response.ok) {
+    throw new Error("Failed to load session");
+  }
+
+  return (await response.json()) as SessionDetail;
 }

@@ -3,6 +3,7 @@ import type { SessionSummary } from "../types";
 export function SessionListView(props: {
   sessions: SessionSummary[];
   onCreate: () => void;
+  onSelect: (sessionId: string) => void;
 }) {
   return (
     <section className="panel stack">
@@ -15,7 +16,11 @@ export function SessionListView(props: {
       </button>
       <ul>
         {props.sessions.map((session) => (
-          <li key={session.id}>{session.agentKind}</li>
+          <li key={session.id}>
+            <button className="button" type="button" onClick={() => props.onSelect(session.id)}>
+              {session.agentKind}
+            </button>
+          </li>
         ))}
       </ul>
     </section>
