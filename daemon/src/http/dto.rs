@@ -14,6 +14,11 @@ pub struct CreateSessionRequest {
     pub agent_kind: String,
 }
 
+#[derive(Deserialize)]
+pub struct SendMessageRequest {
+    pub message: String,
+}
+
 #[derive(Serialize)]
 pub struct WorkspaceRootDto {
     pub id: String,

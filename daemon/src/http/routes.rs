@@ -10,8 +10,8 @@ use serde_json::json;
 use crate::{
     app::AppState,
     http::dto::{
-        CreateSessionRequest, LoginRequest, SessionEventDto, SessionSnapshotDto, SessionSummaryDto,
-        WorkspaceRootDto,
+        CreateSessionRequest, LoginRequest, SendMessageRequest, SessionEventDto, SessionSnapshotDto,
+        SessionSummaryDto, WorkspaceRootDto,
     },
     http::ws::stream_session_events,
     workspace,
@@ -24,6 +24,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/workspaces/roots", get(workspace_roots))
         .route("/api/sessions", post(create_session).get(list_sessions))
         .route("/api/sessions/{id}", get(get_session))
+        .route("/api/sessions/{id}/messages", post(send_session_message))
         .route("/ws/sessions/{id}/events", get(stream_session_events))
 }
 
@@ -172,6 +173,26 @@ async fn get_session(
     };
 
     (StatusCode::OK, Json(snapshot_to_dto(snapshot))).into_response()
+}
+
+async fn send_session_message(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(session_id): Path<String>,
+    Json(request): Json<SendMessageRequest>,
+) -> impl IntoResponse {
+    if !is_authenticated(&state, &headers) {
+        return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "UNAUTHORIZED" }))).into_response();
+    }
+
+    match state.sessions.send_user_message(&session_id, request.message).await {
+        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))).into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": error.to_string() })),
+        )
+            .into_response(),
+    }
 }
 
 fn snapshot_to_dto(snapshot: crate::session::model::SessionSnapshot) -> SessionSnapshotDto {

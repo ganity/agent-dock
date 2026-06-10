@@ -33,6 +33,7 @@ pub fn spawn_command(command: LaunchCommand) -> anyhow::Result<Child> {
     let mut child = Command::new(&command.program);
     child
         .args(command.args)
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 

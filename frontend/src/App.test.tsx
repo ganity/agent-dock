@@ -21,10 +21,11 @@ vi.mock("./api", () => ({
   }),
   fetchSessionSnapshot: vi.fn(),
   connectEventStream: vi.fn(() => liveSocket as unknown as WebSocket),
+  sendSessionMessage: vi.fn().mockResolvedValue(undefined),
 }));
 
 import App from "./App";
-import { connectEventStream, createSession, listSessions, login } from "./api";
+import { connectEventStream, createSession, listSessions, login, sendSessionMessage } from "./api";
 
 afterEach(() => {
   cleanup();
@@ -74,5 +75,12 @@ describe("App", () => {
     });
 
     expect(await screen.findByText("live")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Message"), { target: { value: "next step" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => {
+      expect(sendSessionMessage).toHaveBeenCalledWith("sess-1", "next step");
+    });
   });
 });

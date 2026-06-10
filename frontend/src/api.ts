@@ -59,3 +59,15 @@ export function connectEventStream(id: string, after: number): WebSocket {
   const protocol = window.location.protocol === "https:" ? "wss" : "ws";
   return new WebSocket(`${protocol}://${window.location.host}/ws/sessions/${id}/events?after=${after}`);
 }
+
+export async function sendSessionMessage(sessionId: string, message: string): Promise<void> {
+  const response = await fetch(`/api/sessions/${sessionId}/messages`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ message }),
+  });
+
+  if (!response.ok) {
+    throw new Error("Failed to send message");
+  }
+}

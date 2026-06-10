@@ -1,5 +1,12 @@
 import { useEffect, useState } from "react";
-import { connectEventStream, createSession, fetchSessionSnapshot, listSessions, login } from "./api";
+import {
+  connectEventStream,
+  createSession,
+  fetchSessionSnapshot,
+  listSessions,
+  login,
+  sendSessionMessage,
+} from "./api";
 import { CreateSessionView } from "./components/CreateSessionView";
 import { LoginView } from "./components/LoginView";
 import { SessionDetailView } from "./components/SessionDetailView";
@@ -45,7 +52,9 @@ export default function App() {
           <SessionDetailView
             session={selectedSession}
             onBack={() => setSelectedSession(null)}
-            onSend={() => {}}
+            onSend={(message) => {
+              void sendSessionMessage(selectedSession.id, message);
+            }}
           />
         ) : (
           <section className="stack">
