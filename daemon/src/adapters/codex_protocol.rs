@@ -168,6 +168,7 @@ struct RpcNotificationEnvelope {
 
 pub fn parse_notification_event(line: &str) -> anyhow::Result<Option<StoredEvent>> {
     let envelope: RpcNotificationEnvelope = serde_json::from_str(line)?;
+    let params = envelope.params.unwrap_or_default();
 
     let event_type = match envelope.method.as_deref() {
         Some("item/agentMessage/delta") => "assistant.message",
@@ -179,7 +180,19 @@ pub fn parse_notification_event(line: &str) -> anyhow::Result<Option<StoredEvent
         _ => return Ok(None),
     };
 
-    let payload_json = match (envelope.method.as_deref(), envelope.params.unwrap_or_default()) {
+    if matches!(envelope.method.as_deref(), Some("item/started" | "item/completed")) {
+        let item_type = params
+            .get("item")
+            .and_then(|item| item.get("type"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+
+        if matches!(item_type, "userMessage" | "agentMessage") {
+            return Ok(None);
+        }
+    }
+
+    let payload_json = match (envelope.method.as_deref(), params) {
         (Some("item/agentMessage/delta"), params) => {
             json!({ "text": params.get("delta").and_then(Value::as_str).unwrap_or_default() }).to_string()
         }

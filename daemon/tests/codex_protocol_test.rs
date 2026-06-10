@@ -43,6 +43,28 @@ fn parse_notification_event_maps_real_codex_methods() {
 }
 
 #[test]
+fn parse_notification_event_ignores_user_and_agent_message_item_lifecycle() {
+    let user_started =
+        r#"{"method":"item/started","params":{"item":{"id":"u1","type":"userMessage"},"threadId":"t1","turnId":"x","startedAtMs":1}}"#;
+    let agent_completed =
+        r#"{"method":"item/completed","params":{"item":{"id":"a1","type":"agentMessage"},"threadId":"t1","turnId":"x","completedAtMs":2}}"#;
+
+    assert!(parse_notification_event(user_started).unwrap().is_none());
+    assert!(parse_notification_event(agent_completed).unwrap().is_none());
+}
+
+#[test]
+fn parse_notification_event_keeps_real_tool_lifecycle() {
+    let tool_started =
+        r#"{"method":"item/started","params":{"item":{"id":"tool-1","type":"local_shell_call"},"threadId":"t1","turnId":"x","startedAtMs":1}}"#;
+
+    let event = parse_notification_event(tool_started).unwrap().unwrap();
+
+    assert_eq!(event.event_type, "tool.call.started");
+    assert!(event.payload_json.contains("local_shell_call"));
+}
+
+#[test]
 fn protocol_bootstraps_thread_and_flushes_queued_messages() {
     let mut protocol = CodexSessionProtocol::new("/tmp/workspace".into());
 
