@@ -45,3 +45,13 @@ export function StatusCard(props: { status: string }) {
     </section>
   );
 }
+
+export function ToolCard(props: { label: string; status: string }) {
+  return (
+    <section className="panel stack">
+      <strong>Tool activity</strong>
+      <p>{props.label}</p>
+      <p>{props.status}</p>
+    </section>
+  );
+}
