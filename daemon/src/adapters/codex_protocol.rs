@@ -14,7 +14,8 @@ pub struct CodexSessionProtocol {
     cwd: String,
     next_request_id: usize,
     initialize_request_id: Option<String>,
-    pending_thread_start_request_id: Option<String>,
+    pending_thread_request_id: Option<String>,
+    resume_thread_id: Option<String>,
     thread_id: Option<String>,
     queued_messages: VecDeque<String>,
 }
@@ -25,7 +26,20 @@ impl CodexSessionProtocol {
             cwd,
             next_request_id: 1,
             initialize_request_id: None,
-            pending_thread_start_request_id: None,
+            pending_thread_request_id: None,
+            resume_thread_id: None,
+            thread_id: None,
+            queued_messages: VecDeque::new(),
+        }
+    }
+
+    pub fn new_attached(cwd: String, thread_id: String) -> Self {
+        Self {
+            cwd,
+            next_request_id: 1,
+            initialize_request_id: None,
+            pending_thread_request_id: None,
+            resume_thread_id: Some(thread_id),
             thread_id: None,
             queued_messages: VecDeque::new(),
         }
@@ -62,15 +76,24 @@ impl CodexSessionProtocol {
         };
 
         if self.initialize_request_id.as_deref() == Some(response.id.as_str()) {
-            let request_id = self.next_id("thread-start");
-            self.pending_thread_start_request_id = Some(request_id.clone());
+            let request_id = if self.resume_thread_id.is_some() {
+                self.next_id("thread-resume")
+            } else {
+                self.next_id("thread-start")
+            };
+            self.pending_thread_request_id = Some(request_id.clone());
+            let request = if let Some(thread_id) = &self.resume_thread_id {
+                build_thread_resume_request(&request_id, thread_id, &self.cwd)
+            } else {
+                build_thread_start_request(&request_id, &self.cwd)
+            };
             return Ok(CodexLineResult {
-                outgoing: vec![build_thread_start_request(&request_id, &self.cwd)],
+                outgoing: vec![request],
                 event: None,
             });
         }
 
-        if self.pending_thread_start_request_id.as_deref() == Some(response.id.as_str()) {
+        if self.pending_thread_request_id.as_deref() == Some(response.id.as_str()) {
             let thread_id = response
                 .result
                 .get("thread")
@@ -79,7 +102,7 @@ impl CodexSessionProtocol {
                 .ok_or_else(|| anyhow::anyhow!("thread/start response missing thread.id"))?
                 .to_string();
             self.thread_id = Some(thread_id.clone());
-            self.pending_thread_start_request_id = None;
+            self.pending_thread_request_id = None;
 
             let mut outgoing = Vec::new();
             while let Some(message) = self.queued_messages.pop_front() {
@@ -135,6 +158,21 @@ pub fn build_thread_start_request(request_id: &str, cwd: &str) -> Value {
         "id": request_id,
         "method": "thread/start",
         "params": {
+            "cwd": cwd,
+            "approvalPolicy": "never",
+            "sandbox": "danger-full-access",
+            "personality": "pragmatic"
+        }
+    })
+}
+
+pub fn build_thread_resume_request(request_id: &str, thread_id: &str, cwd: &str) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "method": "thread/resume",
+        "params": {
+            "threadId": thread_id,
             "cwd": cwd,
             "approvalPolicy": "never",
             "sandbox": "danger-full-access",

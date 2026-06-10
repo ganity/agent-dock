@@ -133,6 +133,18 @@ impl SessionService {
             return Ok(());
         }
 
+        if snapshot.session.agent_kind == "codex"
+            && self.runtime_inputs.lock().unwrap().get(session_id).is_none()
+            && snapshot.session.runtime_session_id.is_some()
+        {
+            self.spawn_attached_codex_runtime(
+                session_id,
+                &snapshot.session.workspace_path,
+                snapshot.session.runtime_session_id.clone().unwrap(),
+            )
+            .await?;
+        }
+
         let Some(sender) = self.runtime_inputs.lock().unwrap().get(session_id).cloned() else {
             return Ok(());
         };
@@ -223,6 +235,30 @@ impl SessionService {
             .append_event(session_id, "session.status.changed", r#"{"status":"running"}"#)
             .await?;
 
+        let protocol = CodexSessionProtocol::new(workspace_path.to_string());
+        self.spawn_codex_runtime_with_protocol(session_id, protocol).await
+    }
+
+    async fn spawn_attached_codex_runtime(
+        &self,
+        session_id: &str,
+        workspace_path: &str,
+        runtime_session_id: String,
+    ) -> anyhow::Result<()> {
+        self.store.update_session_status(session_id, "running").await?;
+        self.store
+            .append_event(session_id, "session.status.changed", r#"{"status":"running"}"#)
+            .await?;
+
+        let protocol = CodexSessionProtocol::new_attached(workspace_path.to_string(), runtime_session_id);
+        self.spawn_codex_runtime_with_protocol(session_id, protocol).await
+    }
+
+    async fn spawn_codex_runtime_with_protocol(
+        &self,
+        session_id: &str,
+        mut protocol: CodexSessionProtocol,
+    ) -> anyhow::Result<()> {
         let mut child = (self.process_spawner)(codex_managed_launch())?;
         let stdin = child
             .stdin
@@ -238,7 +274,6 @@ impl SessionService {
         let codex_protocols = self.codex_protocols.clone();
         let (tx, mut rx) = mpsc::unbounded_channel::<String>();
 
-        let mut protocol = CodexSessionProtocol::new(workspace_path.to_string());
         let bootstrap = protocol.bootstrap_requests();
         codex_protocols
             .lock()

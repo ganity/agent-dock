@@ -1,6 +1,6 @@
 use agent_workspace_daemon::adapters::codex_protocol::{
-    build_initialize_request, build_thread_start_request, build_turn_start_request, parse_notification_event,
-    CodexSessionProtocol,
+    build_initialize_request, build_thread_resume_request, build_thread_start_request,
+    build_turn_start_request, parse_notification_event, CodexSessionProtocol,
 };
 
 #[test]
@@ -17,6 +17,15 @@ fn thread_start_request_uses_thread_start_method_and_cwd() {
     let request = build_thread_start_request("req-2", "/tmp/workspace");
 
     assert_eq!(request["method"], "thread/start");
+    assert_eq!(request["params"]["cwd"], "/tmp/workspace");
+}
+
+#[test]
+fn thread_resume_request_uses_thread_resume_method_and_thread_id() {
+    let request = build_thread_resume_request("req-2", "thread-1", "/tmp/workspace");
+
+    assert_eq!(request["method"], "thread/resume");
+    assert_eq!(request["params"]["threadId"], "thread-1");
     assert_eq!(request["params"]["cwd"], "/tmp/workspace");
 }
 
@@ -86,4 +95,27 @@ fn protocol_bootstraps_thread_and_flushes_queued_messages() {
     assert_eq!(thread_result.outgoing[0]["method"], "turn/start");
     assert_eq!(thread_result.outgoing[0]["params"]["threadId"], "thread-1");
     assert_eq!(thread_result.outgoing[0]["params"]["input"][0]["text"], "hello world");
+}
+
+#[test]
+fn attached_protocol_bootstraps_resume_and_flushes_queued_messages() {
+    let mut protocol = CodexSessionProtocol::new_attached("/tmp/workspace".into(), "thread-1".into());
+
+    let bootstrap = protocol.bootstrap_requests();
+    assert_eq!(bootstrap.len(), 1);
+    assert_eq!(bootstrap[0]["method"], "initialize");
+
+    let queued = protocol.enqueue_user_message("hello world".into()).unwrap();
+    assert!(queued.is_empty());
+
+    let init_response = r#"{"jsonrpc":"2.0","id":"agent-workspace-initialize-1","result":{}}"#;
+    let init_result = protocol.handle_server_line(init_response).unwrap();
+    assert_eq!(init_result.outgoing.len(), 1);
+    assert_eq!(init_result.outgoing[0]["method"], "thread/resume");
+
+    let thread_response = r#"{"jsonrpc":"2.0","id":"agent-workspace-thread-resume-2","result":{"thread":{"id":"thread-1"}}}"#;
+    let thread_result = protocol.handle_server_line(thread_response).unwrap();
+    assert_eq!(thread_result.outgoing.len(), 1);
+    assert_eq!(thread_result.outgoing[0]["method"], "turn/start");
+    assert_eq!(thread_result.outgoing[0]["params"]["threadId"], "thread-1");
 }
