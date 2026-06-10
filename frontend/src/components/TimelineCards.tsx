@@ -7,6 +7,15 @@ export function ThinkingCard(props: { text: string }) {
   );
 }
 
+export function UserCard(props: { text: string }) {
+  return (
+    <section className="panel stack">
+      <strong>You</strong>
+      <p>{props.text}</p>
+    </section>
+  );
+}
+
 export function MessageCard(props: { text: string }) {
   return (
     <section className="panel stack">
@@ -24,6 +33,15 @@ export function FileChangeCard(props: { files: string[] }) {
           <li key={file}>{file}</li>
         ))}
       </ul>
+    </section>
+  );
+}
+
+export function StatusCard(props: { status: string }) {
+  return (
+    <section className="panel stack">
+      <strong>Status</strong>
+      <p>{props.status}</p>
     </section>
   );
 }

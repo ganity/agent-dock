@@ -1,6 +1,6 @@
 import type { SessionDetail } from "../types";
 import { Composer } from "./Composer";
-import { FileChangeCard, MessageCard, ThinkingCard } from "./TimelineCards";
+import { FileChangeCard, MessageCard, StatusCard, ThinkingCard, UserCard } from "./TimelineCards";
 
 export function SessionDetailView(props: {
   session: SessionDetail;
@@ -19,6 +19,9 @@ export function SessionDetailView(props: {
         <p className="muted">Session details</p>
       </section>
       {events.map((event) => {
+        if (event.eventType === "user.message") {
+          return <UserCard key={event.id} text={String(event.payload.text ?? "")} />;
+        }
         if (event.eventType === "assistant.thinking.delta") {
           return <ThinkingCard key={event.id} text={String(event.payload.text ?? "")} />;
         }
@@ -30,6 +33,9 @@ export function SessionDetailView(props: {
             ? event.payload.files.map((value) => String(value))
             : [];
           return <FileChangeCard key={event.id} files={files} />;
+        }
+        if (event.eventType === "session.status.changed") {
+          return <StatusCard key={event.id} status={String(event.payload.status ?? "")} />;
         }
         return null;
       })}
