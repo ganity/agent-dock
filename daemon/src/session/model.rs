@@ -16,6 +16,15 @@ pub struct StoredEvent {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct SessionSummary {
+    pub id: String,
+    pub workspace_path: String,
+    pub source_kind: String,
+    pub agent_kind: String,
+    pub status: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct SessionSnapshot {
     pub session: SessionRecord,
     pub events: Vec<StoredEvent>,

@@ -26,10 +26,10 @@ Per the planning rules, this is a sign the work should be decomposed into separa
 Implement these plans in order:
 
 1. [Agent Workspace Foundation Plan](/home/jhz/tools/agent-terminal-platform/agent-workspace/docs/plans/2026-06-10-agent-workspace-foundation-implementation-plan.md)
-2. Managed Sessions Plan
+2. [Managed Sessions Plan](/home/jhz/tools/agent-terminal-platform/agent-workspace/docs/plans/2026-06-10-agent-workspace-managed-sessions-implementation-plan.md)
 3. Recovery And Attach Plan
 
-Only Plan 1 is executable now. Plans 2 and 3 should be written immediately after Plan 1 is implemented and verified, using the same planning discipline.
+Plans 1 and 2 are executable now. Plan 3 should be written immediately after Plan 2 is implemented and verified, using the same planning discipline.
 
 ## Scope Mapping
 
@@ -80,6 +80,6 @@ Covers:
 
 ## Current Recommended Next Step
 
-Execute Plan 1:
+Execute Plan 2:
 
-- [Agent Workspace Foundation Plan](/home/jhz/tools/agent-terminal-platform/agent-workspace/docs/plans/2026-06-10-agent-workspace-foundation-implementation-plan.md)
+- [Managed Sessions Plan](/home/jhz/tools/agent-terminal-platform/agent-workspace/docs/plans/2026-06-10-agent-workspace-managed-sessions-implementation-plan.md)

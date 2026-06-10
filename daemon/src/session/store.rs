@@ -1,7 +1,7 @@
 use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
 
-use crate::session::model::{SessionRecord, SessionSnapshot, StoredEvent};
+use crate::session::model::{SessionRecord, SessionSnapshot, SessionSummary, StoredEvent};
 
 pub struct SqliteSessionStore {
     pool: SqlitePool,
@@ -51,6 +51,67 @@ impl SqliteSessionStore {
         .bind(session_id)
         .bind(event_type)
         .bind(payload_json)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn list_sessions(&self) -> anyhow::Result<Vec<SessionSummary>> {
+        let rows = sqlx::query(
+            "select id, workspace_path, source_kind, agent_kind, status
+             from sessions
+             order by updated_at desc, id desc",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| SessionSummary {
+                id: row.get("id"),
+                workspace_path: row.get("workspace_path"),
+                source_kind: row.get("source_kind"),
+                agent_kind: row.get("agent_kind"),
+                status: row.get("status"),
+            })
+            .collect())
+    }
+
+    pub async fn events_after(
+        &self,
+        session_id: &str,
+        cursor: i64,
+    ) -> anyhow::Result<Vec<StoredEvent>> {
+        let rows = sqlx::query(
+            "select id, event_type, payload_json
+             from session_events
+             where session_id = ?1 and id > ?2
+             order by id asc",
+        )
+        .bind(session_id)
+        .bind(cursor)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| StoredEvent {
+                id: row.get("id"),
+                event_type: row.get("event_type"),
+                payload_json: row.get("payload_json"),
+            })
+            .collect())
+    }
+
+    pub async fn update_session_status(&self, session_id: &str, status: &str) -> anyhow::Result<()> {
+        sqlx::query(
+            "update sessions
+             set status = ?2, updated_at = datetime('now')
+             where id = ?1",
+        )
+        .bind(session_id)
+        .bind(status)
         .execute(&self.pool)
         .await?;
 
