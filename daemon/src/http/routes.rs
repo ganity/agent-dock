@@ -90,7 +90,7 @@ async fn create_session(
 
     let session_id = match state
         .sessions
-        .create_placeholder_session(request.root_id, request.path, request.agent_kind)
+        .create_managed_session(request.root_id, request.path, request.agent_kind)
         .await
     {
         Ok(value) => value,

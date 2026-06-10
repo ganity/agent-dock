@@ -1,6 +1,7 @@
 use axum::Router;
 
 use crate::{
+    adapters::process::{spawn_command, LaunchCommand},
     auth::AuthState,
     config::AppConfig,
     http::routes::routes,
@@ -26,5 +27,21 @@ pub async fn build_router(config: AppConfig) -> Router {
 }
 
 pub async fn build_test_router() -> Router {
-    build_router(AppConfig::for_tests()).await
+    let config = AppConfig::for_tests();
+    let store = SqliteSessionStore::in_memory().await.unwrap();
+    let state = AppState {
+        auth: AuthState::new(config.pin.clone()),
+        config,
+        sessions: SessionService::new_with_spawner(
+            store,
+            std::sync::Arc::new(|_command: LaunchCommand| {
+                spawn_command(LaunchCommand {
+                    program: "sh".into(),
+                    args: vec!["-lc".into(), "true".into()],
+                })
+            }),
+        ),
+    };
+
+    routes().with_state(state)
 }

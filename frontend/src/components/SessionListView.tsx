@@ -9,7 +9,7 @@ export function SessionListView(props: {
     <section className="panel stack">
       <div className="stack">
         <h1>Sessions</h1>
-        <p className="muted">Foundation shell with placeholder sessions.</p>
+        <p className="muted">Structured managed sessions backed by the local daemon.</p>
       </div>
       <button className="button" type="button" onClick={props.onCreate}>
         New session

@@ -11,11 +11,11 @@ export function CreateSessionView(props: {
         props.onSubmit({
           rootId: "workspace",
           path: "repo",
-          agentKind: "placeholder",
+          agentKind: "claude",
         })
       }
     >
-      Create placeholder session
+      Create Claude session
     </button>
   );
 }

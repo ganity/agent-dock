@@ -38,13 +38,13 @@ describe("App", () => {
       expect(listSessions).toHaveBeenCalledTimes(1);
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Create placeholder session" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create Claude session" }));
 
     await waitFor(() => {
       expect(createSession).toHaveBeenCalledWith({
         rootId: "workspace",
         path: "repo",
-        agentKind: "placeholder",
+        agentKind: "claude",
       });
     });
 
