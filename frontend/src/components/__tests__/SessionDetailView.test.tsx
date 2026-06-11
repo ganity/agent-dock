@@ -30,8 +30,14 @@ describe("SessionDetailView", () => {
               eventType: "tool.call.completed",
               payload: { item: { id: "tool-2", type: "commandExecution" } },
             },
-            { id: 6, eventType: "session.status.changed", payload: { status: "running" } },
-            { id: 7, eventType: "session.status.changed", payload: { status: "idle" } },
+            { id: 6, eventType: "file.change.reported", payload: { files: ["src/app.rs"] } },
+            {
+              id: 7,
+              eventType: "session.attached",
+              payload: { runtimeSessionId: "thread-abc" },
+            },
+            { id: 8, eventType: "session.status.changed", payload: { status: "running" } },
+            { id: 9, eventType: "session.status.changed", payload: { status: "idle" } },
           ],
         }}
         onBack={() => {}}
@@ -55,7 +61,13 @@ describe("SessionDetailView", () => {
     expect(screen.getByText("Activity")).toBeInTheDocument();
     expect(screen.getByText("commandExecution")).toBeInTheDocument();
     expect(screen.getByText("completed × 2")).toBeInTheDocument();
+    expect(screen.getByText("src/app.rs")).toBeInTheDocument();
+    expect(screen.getByText("thread-abc")).toBeInTheDocument();
     expect(screen.getByText("running → idle")).toBeInTheDocument();
+    expect(screen.getByText("Activity").closest("details")).not.toBeNull();
+    expect(screen.getByText("Status").closest("details")).not.toBeNull();
+    expect(screen.getByText("Files changed").closest(".activity-card")).not.toBeNull();
+    expect(screen.getByText("Attached session").closest(".activity-card")).not.toBeNull();
 
     const reasoning = screen.getByText("Reasoning").closest("details");
     expect(reasoning).not.toHaveAttribute("open");

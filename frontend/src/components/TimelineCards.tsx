@@ -54,8 +54,8 @@ export function ActivitySummaryCard(props: {
   groups: Array<{ label: string; status: string; count: number }>;
 }) {
   return (
-    <section className="activity-card panel stack">
-      <div className="card-kicker">Activity</div>
+    <details className="activity-card panel stack">
+      <summary>Activity</summary>
       <ul className="activity-list">
         {props.groups.map((group) => (
           <li key={`${group.label}-${group.status}`} className="activity-row">
@@ -66,26 +66,28 @@ export function ActivitySummaryCard(props: {
           </li>
         ))}
       </ul>
-    </section>
+    </details>
   );
 }
 
 export function StatusSummaryCard(props: { statuses: string[] }) {
   return (
-    <section className="status-summary-card panel stack">
-      <div className="card-kicker">Status</div>
+    <details className="activity-card panel stack">
+      <summary>Status</summary>
       <p>{props.statuses.join(" → ")}</p>
-    </section>
+    </details>
   );
 }
 
 export function FileChangeCard(props: { files: string[] }) {
   return (
-    <section className="file-change-card panel stack">
+    <section className="activity-card panel stack">
       <div className="card-kicker">Files changed</div>
-      <ul>
+      <ul className="activity-list">
         {props.files.map((file) => (
-          <li key={file}>{file}</li>
+          <li key={file}>
+            <span>{file}</span>
+          </li>
         ))}
       </ul>
     </section>
@@ -94,9 +96,9 @@ export function FileChangeCard(props: { files: string[] }) {
 
 export function AttachedSessionCard(props: { runtimeSessionId: string }) {
   return (
-    <section className="attached-card panel stack">
+    <section className="activity-card panel stack">
       <div className="card-kicker">Attached session</div>
-      <p>{props.runtimeSessionId}</p>
+      <p className="technical-text">{props.runtimeSessionId}</p>
     </section>
   );
 }
