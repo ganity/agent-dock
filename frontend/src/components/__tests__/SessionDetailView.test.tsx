@@ -135,4 +135,31 @@ describe("SessionDetailView", () => {
     );
     expect(screen.queryByText("Status")).not.toBeInTheDocument();
   });
+
+  it("preserves the latest non-empty timeline status across separated blank status segments", () => {
+    render(
+      <SessionDetailView
+        session={{
+          id: "sess-separated-status",
+          agentKind: "codex",
+          status: "created",
+          events: [
+            { id: 1, eventType: "session.status.changed", payload: { status: "running" } },
+            { id: 2, eventType: "assistant.message", payload: { text: "still working" } },
+            { id: 3, eventType: "session.status.changed", payload: {} },
+          ],
+        }}
+        onBack={() => {}}
+        onSend={() => {}}
+      />,
+    );
+
+    expect(document.querySelector(".session-summary-card .status-pill")).toHaveTextContent(
+      "running",
+    );
+    expect(screen.getByText("still working")).toBeInTheDocument();
+    expect(screen.getByText("Status")).toBeInTheDocument();
+    expect(screen.getByText("running", { selector: "p" })).toBeInTheDocument();
+    expect(screen.queryByText("created")).not.toBeInTheDocument();
+  });
 });

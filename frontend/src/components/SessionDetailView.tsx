@@ -18,13 +18,8 @@ export function SessionDetailView(props: {
   onSend: (message: string) => void;
 }) {
   const items = projectTimelineEvents(props.session.events ?? []);
-  const latestStatusSummary = [...items].reverse().find((item) => item.kind === "status_summary");
-  const latestStatuses =
-    latestStatusSummary?.kind === "status_summary"
-      ? latestStatusSummary.statuses.map(normalizeStatus).filter(isDefinedStatus)
-      : [];
   const latestStatus =
-    latestStatuses.at(-1) ?? normalizeStatus(props.session.status) ?? props.session.status;
+    findLatestNonEmptyStatus(items) ?? normalizeStatus(props.session.status) ?? props.session.status;
 
   return (
     <section className="session-detail session-detail-view stack">
@@ -89,4 +84,22 @@ function normalizeStatus(status?: string): string | undefined {
 
 function isDefinedStatus(status: string | undefined): status is string {
   return status !== undefined;
+}
+
+function findLatestNonEmptyStatus(items: ReturnType<typeof projectTimelineEvents>): string | undefined {
+  for (let itemIndex = items.length - 1; itemIndex >= 0; itemIndex -= 1) {
+    const item = items[itemIndex];
+    if (item.kind !== "status_summary") {
+      continue;
+    }
+
+    for (let statusIndex = item.statuses.length - 1; statusIndex >= 0; statusIndex -= 1) {
+      const status = normalizeStatus(item.statuses[statusIndex]);
+      if (status) {
+        return status;
+      }
+    }
+  }
+
+  return undefined;
 }
