@@ -54,6 +54,9 @@ pub struct SessionSnapshotDto {
     pub source_kind: String,
     #[serde(rename = "runtimeSessionId")]
     pub runtime_session_id: Option<String>,
+    #[serde(rename = "workspacePath")]
+    pub workspace_path: String,
+    pub status: String,
     pub events: Vec<SessionEventDto>,
 }
 

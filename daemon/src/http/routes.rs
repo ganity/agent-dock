@@ -247,6 +247,8 @@ fn snapshot_to_dto(snapshot: crate::session::model::SessionSnapshot) -> SessionS
         agent_kind: snapshot.session.agent_kind,
         source_kind: snapshot.session.source_kind,
         runtime_session_id: snapshot.session.runtime_session_id,
+        workspace_path: snapshot.session.workspace_path,
+        status: snapshot.session.status,
         events: snapshot
             .events
             .into_iter()

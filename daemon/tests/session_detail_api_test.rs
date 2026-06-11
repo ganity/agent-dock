@@ -64,4 +64,6 @@ async fn get_session_detail_returns_snapshot_events() {
     let text = String::from_utf8(body.to_vec()).unwrap();
     assert!(text.contains("\"eventType\":\"session.created\""));
     assert!(text.contains("\"agentKind\":\"claude\""));
+    assert!(text.contains("\"workspacePath\":\"repo\""));
+    assert!(text.contains("\"status\":\"created\""));
 }

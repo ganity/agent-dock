@@ -37,5 +37,7 @@ export interface SessionDetail {
   agentKind: string;
   sourceKind?: string;
   runtimeSessionId?: string;
+  workspacePath?: string;
+  status?: string;
   events: SessionEvent[];
 }
