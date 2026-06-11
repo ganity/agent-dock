@@ -1,9 +1,28 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { SessionDetailView } from "../SessionDetailView";
 
+const styles = readFileSync(resolve(process.cwd(), "src/styles.css"), "utf8");
+
 describe("SessionDetailView", () => {
+  it("scopes mobile-reader stylesheet hooks to the session detail surface", () => {
+    const mobileReaderRoot = styles.match(/:root\s*{[^}]*--font-ui:[^}]*}/)?.[0] ?? "";
+
+    expect(mobileReaderRoot).toContain("--font-ui");
+    expect(mobileReaderRoot).not.toContain("font-family:");
+    expect(styles).toContain(".session-detail .button:focus-visible");
+    expect(styles).toContain(".session-detail .input:focus-visible");
+    expect(styles).toContain(".session-detail summary:focus-visible");
+    expect(styles).not.toMatch(/^\.(button|input):focus-visible/m);
+    expect(styles).not.toMatch(/^summary:focus-visible/m);
+    expect(styles).toContain(".activity-row span:last-child");
+    expect(styles).not.toContain(".activity-list strong");
+  });
+
   it("renders a mobile-reader transcript with grouped activity and collapsed reasoning", () => {
     const onSend = vi.fn();
 
@@ -46,13 +65,12 @@ describe("SessionDetailView", () => {
     );
 
     const backButton = screen.getByRole("button", { name: "Back" });
+    const sessionDetail = document.querySelector(".session-detail");
     expect(backButton).toBeInTheDocument();
     expect(backButton).toHaveClass("back-button");
-    expect(screen.getByRole("button", { name: "Back" })).toHaveClass("back-button");
     expect(screen.getByRole("button", { name: "Send" })).toHaveClass("composer-send");
     expect(screen.getByLabelText("Message")).toHaveClass("composer-input");
-    expect(document.querySelector(".session-detail")).toBeInTheDocument();
-    expect(document.querySelector(".session-detail")).not.toBeNull();
+    expect(sessionDetail).toBeInTheDocument();
     expect(document.querySelector(".session-transcript")).toBeInTheDocument();
     expect(document.querySelector(".session-summary-card")).not.toBeNull();
     expect(document.querySelector(".assistant-card")).not.toBeNull();

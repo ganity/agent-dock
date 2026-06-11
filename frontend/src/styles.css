@@ -98,7 +98,6 @@ select {
   --run-green-soft: #a7f3d0;
   --font-ui: "Atkinson Hyperlegible", "Aptos", "Segoe UI", sans-serif;
   --font-mono: "JetBrains Mono", "SFMono-Regular", "Cascadia Code", monospace;
-  font-family: var(--font-ui);
 }
 
 .session-detail {
@@ -255,7 +254,7 @@ select {
   background: var(--panel-bg-strong);
 }
 
-.activity-list strong {
+.activity-row span:last-child {
   color: var(--run-green-soft);
   white-space: nowrap;
 }
@@ -287,9 +286,9 @@ select {
   min-height: 44px;
 }
 
-.button:focus-visible,
-.input:focus-visible,
-summary:focus-visible {
+.session-detail .button:focus-visible,
+.session-detail .input:focus-visible,
+.session-detail summary:focus-visible {
   outline: 2px solid var(--run-green);
   outline-offset: 3px;
 }
