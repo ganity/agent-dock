@@ -15,7 +15,7 @@ describe("SessionDetailView", () => {
           sourceKind: "managed",
           runtimeSessionId: "thread-abc-123",
           workspacePath: "/tmp/workspace",
-          status: "running",
+          status: "created",
           events: [
             { id: 1, eventType: "user.message", payload: { text: "hello" } },
             { id: 2, eventType: "assistant.message", payload: { text: "done" } },
@@ -31,6 +31,7 @@ describe("SessionDetailView", () => {
               payload: { item: { id: "tool-2", type: "commandExecution" } },
             },
             { id: 6, eventType: "session.status.changed", payload: { status: "running" } },
+            { id: 7, eventType: "session.status.changed", payload: { status: "idle" } },
           ],
         }}
         onBack={() => {}}
@@ -38,16 +39,23 @@ describe("SessionDetailView", () => {
       />,
     );
 
-    expect(screen.getByRole("button", { name: "Back" })).toBeInTheDocument();
+    const backButton = screen.getByRole("button", { name: "Back" });
+    expect(backButton).toBeInTheDocument();
+    expect(backButton).toHaveClass("back-button");
+    expect(document.querySelector(".session-detail")).toBeInTheDocument();
+    expect(document.querySelector(".session-transcript")).toBeInTheDocument();
     expect(screen.getByText("codex")).toBeInTheDocument();
     expect(screen.getByText("/tmp/workspace")).toBeInTheDocument();
     expect(screen.getByText("source: managed")).toBeInTheDocument();
     expect(screen.getByText("runtime: thread-abc-123")).toBeInTheDocument();
+    expect(document.querySelector(".session-summary-card .status-pill")).toHaveTextContent("idle");
     expect(screen.getByText("hello")).toBeInTheDocument();
     expect(screen.getByText("done")).toBeInTheDocument();
+    expect(document.querySelector(".assistant-copy")).toBeInTheDocument();
     expect(screen.getByText("Activity")).toBeInTheDocument();
     expect(screen.getByText("commandExecution")).toBeInTheDocument();
     expect(screen.getByText("completed × 2")).toBeInTheDocument();
+    expect(screen.getByText("running → idle")).toBeInTheDocument();
 
     const reasoning = screen.getByText("Reasoning").closest("details");
     expect(reasoning).not.toHaveAttribute("open");

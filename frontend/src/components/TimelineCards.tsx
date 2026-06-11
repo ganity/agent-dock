@@ -5,7 +5,7 @@ export function SessionSummaryCard(props: {
   status?: string;
 }) {
   return (
-    <section className="session-summary-card">
+    <section className="session-summary-card panel stack">
       <div className="session-summary-row">
         <div>
           <p className="eyebrow">Workspace</p>
@@ -25,7 +25,7 @@ export function SessionSummaryCard(props: {
 
 export function ThinkingCard(props: { text: string }) {
   return (
-    <details className="reasoning-card">
+    <details className="reasoning-card panel stack">
       <summary>Reasoning</summary>
       <pre>{props.text}</pre>
     </details>
@@ -34,7 +34,7 @@ export function ThinkingCard(props: { text: string }) {
 
 export function UserCard(props: { text: string }) {
   return (
-    <section className="user-card">
+    <section className="user-card panel stack">
       <div className="card-kicker">You</div>
       <p>{props.text}</p>
     </section>
@@ -43,9 +43,9 @@ export function UserCard(props: { text: string }) {
 
 export function AssistantCard(props: { text: string }) {
   return (
-    <article className="assistant-card">
+    <article className="assistant-card panel stack">
       <div className="card-kicker">Assistant</div>
-      <p>{props.text}</p>
+      <p className="assistant-copy">{props.text}</p>
     </article>
   );
 }
@@ -54,7 +54,7 @@ export function ActivitySummaryCard(props: {
   groups: Array<{ label: string; status: string; count: number }>;
 }) {
   return (
-    <section className="activity-card">
+    <section className="activity-card panel stack">
       <div className="card-kicker">Activity</div>
       <ul className="activity-list">
         {props.groups.map((group) => (
@@ -72,7 +72,7 @@ export function ActivitySummaryCard(props: {
 
 export function StatusSummaryCard(props: { statuses: string[] }) {
   return (
-    <section className="status-summary-card">
+    <section className="status-summary-card panel stack">
       <div className="card-kicker">Status</div>
       <p>{props.statuses.join(" → ")}</p>
     </section>
@@ -81,7 +81,7 @@ export function StatusSummaryCard(props: { statuses: string[] }) {
 
 export function FileChangeCard(props: { files: string[] }) {
   return (
-    <section className="file-change-card">
+    <section className="file-change-card panel stack">
       <div className="card-kicker">Files changed</div>
       <ul>
         {props.files.map((file) => (
@@ -94,7 +94,7 @@ export function FileChangeCard(props: { files: string[] }) {
 
 export function AttachedSessionCard(props: { runtimeSessionId: string }) {
   return (
-    <section className="attached-card">
+    <section className="attached-card panel stack">
       <div className="card-kicker">Attached session</div>
       <p>{props.runtimeSessionId}</p>
     </section>
