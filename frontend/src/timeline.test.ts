@@ -11,75 +11,106 @@ describe("projectTimelineEvents", () => {
       { id: 3, eventType: "assistant.message", payload: { text: " plan." } },
     ];
 
-    const items = projectTimelineEvents(events);
-
-    expect(items).toEqual([
-      {
-        id: "assistant:1",
-        kind: "assistant",
-        text: "Checking the plan.",
-      },
+    expect(projectTimelineEvents(events)).toEqual([
+      { id: "assistant:1", kind: "assistant", text: "Checking the plan." },
     ]);
   });
 
-  it("coalesces adjacent thinking deltas into one item", () => {
+  it("coalesces adjacent thinking deltas into one collapsed reasoning item", () => {
     const events: SessionEvent[] = [
       { id: 1, eventType: "assistant.thinking.delta", payload: { text: "Look" } },
       { id: 2, eventType: "assistant.thinking.delta", payload: { text: " deeper" } },
     ];
 
-    const items = projectTimelineEvents(events);
-
-    expect(items).toEqual([
-      {
-        id: "thinking:1",
-        kind: "thinking",
-        text: "Look deeper",
-      },
+    expect(projectTimelineEvents(events)).toEqual([
+      { id: "thinking:1", kind: "thinking", text: "Look deeper", collapsed: true },
     ]);
   });
 
-  it("merges tool start and completion for the same item into one card", () => {
+  it("groups repeated tool completions into one activity summary item", () => {
     const events: SessionEvent[] = [
       {
         id: 1,
-        eventType: "tool.call.started",
-        payload: { item: { id: "item-1", type: "reasoning" } },
+        eventType: "tool.call.completed",
+        payload: { item: { id: "tool-1", type: "commandExecution" } },
       },
       {
         id: 2,
         eventType: "tool.call.completed",
-        payload: { item: { id: "item-1", type: "reasoning" } },
+        payload: { item: { id: "tool-2", type: "commandExecution" } },
+      },
+      {
+        id: 3,
+        eventType: "tool.call.completed",
+        payload: { item: { id: "tool-3", type: "reasoning" } },
       },
     ];
 
-    const items = projectTimelineEvents(events);
-
-    expect(items).toEqual([
+    expect(projectTimelineEvents(events)).toEqual([
       {
-        id: "tool:item-1",
-        kind: "tool",
-        label: "reasoning",
-        status: "completed",
+        id: "activity:1",
+        kind: "activity",
+        groups: [
+          { label: "commandExecution", status: "completed", count: 2 },
+          { label: "reasoning", status: "completed", count: 1 },
+        ],
       },
     ]);
   });
 
-  it("preserves order across mixed item kinds", () => {
+  it("collapses status churn into one status summary item", () => {
     const events: SessionEvent[] = [
-      { id: 1, eventType: "user.message", payload: { text: "hello" } },
-      { id: 2, eventType: "assistant.message", payload: { text: "done" } },
-      { id: 3, eventType: "session.status.changed", payload: { status: "running" } },
-      { id: 4, eventType: "session.attached", payload: { runtimeSessionId: "thread-abc" } },
+      { id: 1, eventType: "session.status.changed", payload: { status: "running" } },
+      { id: 2, eventType: "session.status.changed", payload: { status: "active" } },
+      { id: 3, eventType: "session.status.changed", payload: { status: "idle" } },
     ];
 
-    const items = projectTimelineEvents(events);
+    expect(projectTimelineEvents(events)).toEqual([
+      { id: "status:1", kind: "status_summary", statuses: ["running", "active", "idle"] },
+    ]);
+  });
 
-    expect(items).toEqual([
+  it("flushes activity summaries before later assistant messages", () => {
+    const events: SessionEvent[] = [
+      { id: 1, eventType: "user.message", payload: { text: "hello" } },
+      {
+        id: 2,
+        eventType: "tool.call.completed",
+        payload: { item: { id: "tool-1", type: "commandExecution" } },
+      },
+      { id: 3, eventType: "assistant.message", payload: { text: "done" } },
+    ];
+
+    expect(projectTimelineEvents(events)).toEqual([
       { id: "user:1", kind: "user", text: "hello" },
-      { id: "assistant:2", kind: "assistant", text: "done" },
-      { id: "status:3", kind: "status", status: "running" },
-      { id: "attached:4", kind: "attached", runtimeSessionId: "thread-abc" },
+      {
+        id: "activity:2",
+        kind: "activity",
+        groups: [{ label: "commandExecution", status: "completed", count: 1 }],
+      },
+      { id: "assistant:3", kind: "assistant", text: "done" },
+    ]);
+  });
+
+  it("preserves order across status and activity segments", () => {
+    const events: SessionEvent[] = [
+      { id: 1, eventType: "session.status.changed", payload: { status: "running" } },
+      {
+        id: 2,
+        eventType: "tool.call.completed",
+        payload: { item: { id: "tool-1", type: "commandExecution" } },
+      },
+      { id: 3, eventType: "session.status.changed", payload: { status: "idle" } },
+    ];
+
+    expect(projectTimelineEvents(events)).toEqual([
+      { id: "status:1", kind: "status_summary", statuses: ["running"] },
+      {
+        id: "activity:2",
+        kind: "activity",
+        groups: [{ label: "commandExecution", status: "completed", count: 1 }],
+      },
+      { id: "status:3", kind: "status_summary", statuses: ["idle"] },
     ]);
   });
 });
