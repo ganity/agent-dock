@@ -48,8 +48,14 @@ describe("SessionDetailView", () => {
     const backButton = screen.getByRole("button", { name: "Back" });
     expect(backButton).toBeInTheDocument();
     expect(backButton).toHaveClass("back-button");
+    expect(screen.getByRole("button", { name: "Back" })).toHaveClass("back-button");
+    expect(screen.getByRole("button", { name: "Send" })).toHaveClass("composer-send");
+    expect(screen.getByLabelText("Message")).toHaveClass("composer-input");
     expect(document.querySelector(".session-detail")).toBeInTheDocument();
+    expect(document.querySelector(".session-detail")).not.toBeNull();
     expect(document.querySelector(".session-transcript")).toBeInTheDocument();
+    expect(document.querySelector(".session-summary-card")).not.toBeNull();
+    expect(document.querySelector(".assistant-card")).not.toBeNull();
     expect(screen.getByText("codex")).toBeInTheDocument();
     expect(screen.getByText("/tmp/workspace")).toBeInTheDocument();
     expect(screen.getByText("source: managed")).toBeInTheDocument();

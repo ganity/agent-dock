@@ -86,3 +86,220 @@ select {
     gap: 12px;
   }
 }
+
+:root {
+  --shell-bg: #05080d;
+  --panel-bg: rgba(10, 19, 35, 0.92);
+  --panel-bg-strong: #0f1e31;
+  --assistant-bg: #f1eadc;
+  --assistant-ink: #141a22;
+  --muted-ink: #8fa1bd;
+  --run-green: #22c55e;
+  --run-green-soft: #a7f3d0;
+  --font-ui: "Atkinson Hyperlegible", "Aptos", "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", "SFMono-Regular", "Cascadia Code", monospace;
+  font-family: var(--font-ui);
+}
+
+.session-detail {
+  display: grid;
+  gap: 12px;
+  max-width: 720px;
+  margin: 0 auto;
+  font-family: var(--font-ui);
+}
+
+.session-detail-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 12px;
+  background: linear-gradient(180deg, rgba(5, 8, 13, 0.96) 72%, rgba(5, 8, 13, 0));
+}
+
+.session-title {
+  min-width: 0;
+  text-align: right;
+}
+
+.session-title h1,
+.session-title p {
+  margin: 0;
+}
+
+.session-summary-card,
+.user-card,
+.activity-card,
+.reasoning-card,
+.composer {
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 22px;
+  background: rgba(10, 19, 35, 0.92);
+  padding: 16px;
+}
+
+.session-summary-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.eyebrow,
+.card-kicker {
+  margin: 0 0 8px;
+  color: var(--muted-ink);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.session-path,
+.technical-text,
+.meta-chip,
+.activity-list span {
+  overflow-wrap: anywhere;
+}
+
+.technical-text,
+.meta-chip,
+.activity-list span {
+  font-family: var(--font-mono);
+}
+
+.session-path {
+  margin: 0;
+  font-weight: 800;
+}
+
+.status-pill,
+.meta-chip {
+  border-radius: 999px;
+  padding: 5px 9px;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.status-pill {
+  align-self: start;
+  border: 1px solid rgba(34, 197, 94, 0.36);
+  background: #11351f;
+  color: var(--run-green-soft);
+}
+
+.session-meta-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.meta-chip {
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: #101c2d;
+  color: #aebbd1;
+}
+
+.user-card p {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.assistant-card {
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 24px;
+  background: var(--assistant-bg);
+  color: var(--assistant-ink);
+  padding: 18px;
+  box-shadow: 0 22px 64px rgba(0, 0, 0, 0.34);
+}
+
+.assistant-copy {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  line-height: 1.62;
+}
+
+.session-transcript {
+  display: grid;
+  gap: 12px;
+}
+
+.activity-card summary,
+.reasoning-card summary {
+  min-height: 28px;
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.activity-list {
+  display: grid;
+  gap: 8px;
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+}
+
+.activity-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 11px;
+  border-radius: 14px;
+  background: var(--panel-bg-strong);
+}
+
+.activity-list strong {
+  color: var(--run-green-soft);
+  white-space: nowrap;
+}
+
+.reasoning-card pre {
+  margin: 12px 0 0;
+  color: #9fb0ca;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.composer {
+  position: sticky;
+  bottom: 0;
+  display: grid;
+  gap: 10px;
+  background: linear-gradient(180deg, rgba(5, 8, 13, 0.55), rgba(5, 8, 13, 1));
+}
+
+.composer-input {
+  min-height: 76px;
+}
+
+.composer-send,
+.back-button {
+  min-height: 44px;
+}
+
+.button:focus-visible,
+.input:focus-visible,
+summary:focus-visible {
+  outline: 2px solid var(--run-green);
+  outline-offset: 3px;
+}
+
+@media (min-width: 768px) {
+  .session-detail {
+    max-width: 1080px;
+  }
+
+  .session-transcript {
+    max-width: 760px;
+  }
+}
