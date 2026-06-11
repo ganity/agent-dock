@@ -28,6 +28,7 @@ export function SessionDetailView(props: {
         <div className="detail-heading">
           <p className="eyebrow">Session</p>
           <h1>{props.session.agentKind}</h1>
+          <p className="muted">Session details</p>
         </div>
       </header>
 
