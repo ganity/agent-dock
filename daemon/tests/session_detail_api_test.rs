@@ -62,8 +62,9 @@ async fn get_session_detail_returns_snapshot_events() {
     assert_eq!(detail.status(), StatusCode::OK);
     let body = to_bytes(detail.into_body(), usize::MAX).await.unwrap();
     let text = String::from_utf8(body.to_vec()).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&text).unwrap();
     assert!(text.contains("\"eventType\":\"session.created\""));
     assert!(text.contains("\"agentKind\":\"claude\""));
-    assert!(text.contains("\"workspacePath\":\"repo\""));
-    assert!(text.contains("\"status\":\"created\""));
+    assert_eq!(json["workspacePath"].as_str(), Some("repo"));
+    assert_eq!(json["status"].as_str(), Some("created"));
 }
