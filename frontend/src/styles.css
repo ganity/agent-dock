@@ -108,6 +108,11 @@ select {
   font-family: var(--font-ui);
 }
 
+.session-detail .panel {
+  max-width: none;
+  margin: 0;
+}
+
 .session-detail-topbar {
   position: sticky;
   top: 0;
@@ -130,25 +135,25 @@ select {
   margin: 0;
 }
 
-.session-summary-card,
-.user-card,
-.activity-card,
-.reasoning-card,
-.composer {
+.session-detail .session-summary-card,
+.session-detail .user-card,
+.session-detail .activity-card,
+.session-detail .reasoning-card,
+.session-detail .composer {
   border: 1px solid rgba(148, 163, 184, 0.18);
   border-radius: 22px;
   background: rgba(10, 19, 35, 0.92);
   padding: 16px;
 }
 
-.session-summary-row {
+.session-detail .session-summary-row {
   display: flex;
   justify-content: space-between;
   gap: 12px;
 }
 
-.eyebrow,
-.card-kicker {
+.session-detail .eyebrow,
+.session-detail .card-kicker {
   margin: 0 0 8px;
   color: var(--muted-ink);
   font-size: 0.72rem;
@@ -157,58 +162,58 @@ select {
   text-transform: uppercase;
 }
 
-.session-path,
-.technical-text,
-.meta-chip,
-.activity-list span {
+.session-detail .session-path,
+.session-detail .technical-text,
+.session-detail .meta-chip,
+.session-detail .activity-list span {
   overflow-wrap: anywhere;
 }
 
-.technical-text,
-.meta-chip,
-.activity-list span {
+.session-detail .technical-text,
+.session-detail .meta-chip,
+.session-detail .activity-list span {
   font-family: var(--font-mono);
 }
 
-.session-path {
+.session-detail .session-path {
   margin: 0;
   font-weight: 800;
 }
 
-.status-pill,
-.meta-chip {
+.session-detail .status-pill,
+.session-detail .meta-chip {
   border-radius: 999px;
   padding: 5px 9px;
   font-size: 0.72rem;
   font-weight: 800;
 }
 
-.status-pill {
+.session-detail .status-pill {
   align-self: start;
   border: 1px solid rgba(34, 197, 94, 0.36);
   background: #11351f;
   color: var(--run-green-soft);
 }
 
-.session-meta-chips {
+.session-detail .session-meta-chips {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   margin-top: 12px;
 }
 
-.meta-chip {
+.session-detail .meta-chip {
   border: 1px solid rgba(148, 163, 184, 0.18);
   background: #101c2d;
   color: #aebbd1;
 }
 
-.user-card p {
+.session-detail .user-card p {
   margin: 0;
   line-height: 1.5;
 }
 
-.assistant-card {
+.session-detail .assistant-card {
   border: 1px solid rgba(255, 255, 255, 0.2);
   border-radius: 24px;
   background: var(--assistant-bg);
@@ -217,7 +222,7 @@ select {
   box-shadow: 0 22px 64px rgba(0, 0, 0, 0.34);
 }
 
-.assistant-copy {
+.session-detail .assistant-copy {
   margin: 0;
   font-size: 1rem;
   font-weight: 650;
@@ -225,19 +230,19 @@ select {
   line-height: 1.62;
 }
 
-.session-transcript {
+.session-detail .session-transcript {
   display: grid;
   gap: 12px;
 }
 
-.activity-card summary,
-.reasoning-card summary {
+.session-detail .activity-card summary,
+.session-detail .reasoning-card summary {
   min-height: 28px;
   cursor: pointer;
   font-weight: 800;
 }
 
-.activity-list {
+.session-detail .activity-list {
   display: grid;
   gap: 8px;
   list-style: none;
@@ -245,7 +250,7 @@ select {
   padding: 0;
 }
 
-.activity-list li {
+.session-detail .activity-list li {
   display: flex;
   justify-content: space-between;
   gap: 12px;
@@ -254,12 +259,12 @@ select {
   background: var(--panel-bg-strong);
 }
 
-.activity-row span:last-child {
+.session-detail .activity-row span:last-child {
   color: var(--run-green-soft);
   white-space: nowrap;
 }
 
-.reasoning-card pre {
+.session-detail .reasoning-card pre {
   margin: 12px 0 0;
   color: #9fb0ca;
   font-family: var(--font-mono);
@@ -269,7 +274,7 @@ select {
   white-space: pre-wrap;
 }
 
-.composer {
+.session-detail .composer {
   position: sticky;
   bottom: 0;
   display: grid;
@@ -277,12 +282,12 @@ select {
   background: linear-gradient(180deg, rgba(5, 8, 13, 0.55), rgba(5, 8, 13, 1));
 }
 
-.composer-input {
+.session-detail .composer-input {
   min-height: 76px;
 }
 
-.composer-send,
-.back-button {
+.session-detail .composer-send,
+.session-detail .back-button {
   min-height: 44px;
 }
 
@@ -298,7 +303,7 @@ select {
     max-width: 1080px;
   }
 
-  .session-transcript {
+  .session-detail .session-transcript {
     max-width: 760px;
   }
 }

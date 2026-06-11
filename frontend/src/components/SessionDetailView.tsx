@@ -19,10 +19,12 @@ export function SessionDetailView(props: {
 }) {
   const items = projectTimelineEvents(props.session.events ?? []);
   const latestStatusSummary = [...items].reverse().find((item) => item.kind === "status_summary");
-  const latestStatus =
+  const latestStatuses =
     latestStatusSummary?.kind === "status_summary"
-      ? latestStatusSummary.statuses.at(-1) ?? props.session.status
-      : props.session.status;
+      ? latestStatusSummary.statuses.map(normalizeStatus).filter(isDefinedStatus)
+      : [];
+  const latestStatus =
+    latestStatuses.at(-1) ?? normalizeStatus(props.session.status) ?? props.session.status;
 
   return (
     <section className="session-detail session-detail-view stack">
@@ -65,7 +67,11 @@ export function SessionDetailView(props: {
             return <ActivitySummaryCard key={item.id} groups={item.groups} />;
           }
           if (item.kind === "status_summary") {
-            return <StatusSummaryCard key={item.id} statuses={item.statuses} />;
+            const statuses = item.statuses.map(normalizeStatus).filter(isDefinedStatus);
+            if (statuses.length === 0) {
+              return null;
+            }
+            return <StatusSummaryCard key={item.id} statuses={statuses} />;
           }
           return null;
         })}
@@ -74,4 +80,13 @@ export function SessionDetailView(props: {
       <Composer onSend={props.onSend} />
     </section>
   );
+}
+
+function normalizeStatus(status?: string): string | undefined {
+  const value = status?.trim();
+  return value ? value : undefined;
+}
+
+function isDefinedStatus(status: string | undefined): status is string {
+  return status !== undefined;
 }

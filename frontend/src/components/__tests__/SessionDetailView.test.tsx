@@ -1,12 +1,16 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { SessionDetailView } from "../SessionDetailView";
 
 const styles = readFileSync(resolve(process.cwd(), "src/styles.css"), "utf8");
+
+afterEach(() => {
+  cleanup();
+});
 
 describe("SessionDetailView", () => {
   it("scopes mobile-reader stylesheet hooks to the session detail surface", () => {
@@ -17,9 +21,19 @@ describe("SessionDetailView", () => {
     expect(styles).toContain(".session-detail .button:focus-visible");
     expect(styles).toContain(".session-detail .input:focus-visible");
     expect(styles).toContain(".session-detail summary:focus-visible");
+    expect(styles).toContain(".session-detail .panel");
+    expect(styles).toContain(".session-detail .composer");
+    expect(styles).toContain(".session-detail .activity-card");
+    expect(styles).toContain(".session-detail .eyebrow");
+    expect(styles).toContain(".session-detail .meta-chip");
+    expect(styles).toContain(".session-detail .activity-list span");
     expect(styles).not.toMatch(/^\.(button|input):focus-visible/m);
     expect(styles).not.toMatch(/^summary:focus-visible/m);
-    expect(styles).toContain(".activity-row span:last-child");
+    expect(styles).not.toMatch(/^\.composer\s*{/m);
+    expect(styles).not.toMatch(/^\.activity-card\s*{/m);
+    expect(styles).not.toMatch(/^\.eyebrow\s*{/m);
+    expect(styles).not.toMatch(/^\.meta-chip\s*{/m);
+    expect(styles).toContain(".session-detail .activity-row span:last-child");
     expect(styles).not.toContain(".activity-list strong");
   });
 
@@ -100,5 +114,25 @@ describe("SessionDetailView", () => {
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
     expect(onSend).toHaveBeenCalledWith("Ship it");
+  });
+
+  it("keeps the summary status and skips blank status cards for empty status payloads", () => {
+    render(
+      <SessionDetailView
+        session={{
+          id: "sess-empty-status",
+          agentKind: "codex",
+          status: "created",
+          events: [{ id: 1, eventType: "session.status.changed", payload: {} }],
+        }}
+        onBack={() => {}}
+        onSend={() => {}}
+      />,
+    );
+
+    expect(document.querySelector(".session-summary-card .status-pill")).toHaveTextContent(
+      "created",
+    );
+    expect(screen.queryByText("Status")).not.toBeInTheDocument();
   });
 });
