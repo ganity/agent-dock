@@ -56,6 +56,33 @@ Flutter must keep raw events in session state and project them into mobile-speci
 - Use compact inline spinners for buttons.
 - Empty states must explain what to do next and expose the primary action.
 
+### Motion And Feedback Principles
+
+- Motion must explain state changes, not decorate the interface.
+- Continuous animations are allowed only for active work: loading, sending, uploading, reconnecting, recording, streaming, or running tools.
+- Prefer short transitions between 120 ms and 220 ms for page elements, button states, chips, and card expansion.
+- Prefer longer but subtle transitions between 240 ms and 360 ms for bottom sheets, keyboard-adjacent composer movement, and new timeline item insertion.
+- Respect reduced-motion settings by replacing shimmer, pulse, and slide transitions with opacity changes or static indicators.
+- Use haptic feedback sparingly:
+  - Light impact when send starts.
+  - Success feedback when a message is accepted or image upload completes.
+  - Warning feedback when send/upload fails.
+  - No haptics for every incoming event.
+- Never animate layout so aggressively that the user's reading position changes unexpectedly.
+- Loading indicators should appear for operations expected to take longer than 300 ms; faster operations can complete without spinner to avoid flicker.
+- State text must accompany long-running animations so the user understands what is happening.
+
+### Standard Feedback Patterns
+
+- `Skeleton`: used for first page load and first Chat snapshot load.
+- `Inline spinner`: used inside buttons and compact rows for short operations.
+- `Progress ring`: used for image upload when progress is known or approximated.
+- `Pulse dot`: used for live/running/reconnecting status.
+- `Typing cursor`: used for active assistant text streaming.
+- `Recording pulse`: used for voice input while microphone capture is active.
+- `Banner`: used for offline, reconnecting, and server-level errors.
+- `Toast`: used only for non-blocking confirmations such as copied text.
+
 ### Error State Rules
 
 - Connection errors stay visible as banners, not blocking dialogs, unless the app cannot authenticate or cannot verify the daemon.
@@ -74,6 +101,8 @@ Display:
 - Centered app mark or text logo.
 - Small status text below: `Checking daemon...`, `Restoring session...`, or `Preparing workspace...`.
 - If restoration takes longer than two seconds, show the saved daemon host.
+- Use a subtle breathing pulse on the app mark while work is active.
+- Replace the pulse with a static mark when reduced motion is enabled.
 
 Behavior:
 
@@ -158,6 +187,13 @@ Display hierarchy:
 - Session list grouped by status priority.
 - Empty state when there are no sessions.
 
+Page animation:
+
+- On first load, show three skeleton session rows with muted shimmer.
+- When real sessions arrive, crossfade skeleton rows into session rows over about 160 ms.
+- Insert newly created sessions with a short slide-up and fade-in from the top of the list section.
+- Updating a session status changes only the status pill; do not reanimate the whole row.
+
 Session row display:
 
 - Title from `title`, falling back to workspace basename or agent kind.
@@ -194,6 +230,8 @@ Delete flow:
 - Confirm button is destructive.
 - While deleting, disable the row and show inline progress.
 - On failure, keep the row and show a toast/banner.
+- During delete, row opacity drops slightly and the menu action label changes to `Deleting...`.
+- On successful delete, row collapses vertically and fades out.
 
 Empty state:
 
@@ -334,6 +372,13 @@ Initial state:
 - Scroll to bottom after the first snapshot layout completes.
 - Then connect to `/ws/sessions/{id}/events?after=<lastEventId>`.
 
+Initial animation:
+
+- Skeleton timeline should mimic the final layout: right-aligned user bubble, left assistant block, compact activity card.
+- Use shimmer only while snapshot is loading.
+- After snapshot loads, fade in the timeline over about 160 ms without staggering every historical item.
+- The first automatic scroll to bottom must happen before the fade completes so the user does not see a jump.
+
 Older history:
 
 - When the user scrolls near the top and `hasMoreHistory` is true, request older events with `before=<oldestEventId>`.
@@ -341,6 +386,8 @@ Older history:
 - Prepend older events.
 - Preserve visual scroll anchor so content does not jump.
 - If no more history remains, show a subtle `Beginning of session` marker.
+- The top loader uses a small spinner and fixed height so prepending does not resize unpredictably.
+- Older cards fade in only if they were not previously in memory; do not animate every prepended historical card.
 
 New event behavior:
 
@@ -351,6 +398,10 @@ New event behavior:
 - If the user is not near the bottom, do not move the viewport.
 - When not auto-following, show a floating chip above the composer: `N new updates`.
 - Tapping the chip scrolls to bottom and clears the count.
+- New timeline items inserted at the bottom fade and slide upward by a few pixels over about 180 ms.
+- Lifecycle updates to an existing card animate only the changed sub-elements, such as status pill, spinner, output preview, or progress text.
+- Do not animate text reflow for every streaming token; assistant text should append smoothly without per-token bounce or flashing.
+- When the `N new updates` chip appears, it scales from 96 percent to 100 percent once, then remains static.
 
 ### Composer Area
 
@@ -377,6 +428,15 @@ Send button states:
 - Shows progress when `sendSessionMessage` is in flight.
 - On send failure, restores draft and attachments and shows retry text.
 
+Send animation:
+
+- On tap, the send icon morphs or swaps to a compact spinner inside the same circular button.
+- Composer input stays visible and readable while the request is in flight.
+- Draft text remains in place until the HTTP request succeeds.
+- On success, clear the text with a quick fade rather than an abrupt jump.
+- On failure, shake the composer status row once and show `Send failed. Retry`.
+- The failed send row exposes `Retry` and `Keep editing`.
+
 Attachment states:
 
 - Selected local image shows a thumbnail chip immediately.
@@ -384,6 +444,15 @@ Attachment states:
 - Uploaded chip uses daemon attachment path.
 - Failed chip shows retry and remove controls.
 - Removing a chip removes it from the pending send payload.
+
+Attachment animation:
+
+- Newly selected image chips fade in with a small scale-up.
+- Upload progress appears as a circular ring over the thumbnail.
+- If byte progress is unavailable, use an indeterminate ring and text `Uploading...`.
+- On upload success, the progress ring completes to 100 percent, then fades into a check mark for about 600 ms.
+- On upload failure, the chip border turns red and the overlay changes to `Retry`.
+- Removing a chip fades and shrinks the chip while neighboring chips reposition.
 
 Voice states:
 
@@ -393,6 +462,15 @@ Voice states:
 - Stopping: `Finishing transcript...`.
 - Error: inline error with retry when useful.
 - Stopped: transcript stays in composer for review before send.
+
+Voice animation:
+
+- Connecting uses a small spinner on the microphone button.
+- Listening uses a breathing ring around the microphone button and a subtle waveform in the status row.
+- Transcript changes should update the text field in place; do not animate each word.
+- Stopping freezes the waveform and shows an inline spinner until the final transcript arrives.
+- Permission denied shows a static warning icon, not an infinite animation.
+- Canceling voice input fades out the status row and leaves any previously committed transcript text intact.
 
 ## Chat Timeline Projection
 
@@ -496,6 +574,14 @@ Streaming behavior:
 - Show a subtle typing cursor or shimmer at the end only while session status is active/running and the latest visible item is assistant text.
 - Remove typing indicator when a non-assistant event arrives or session becomes completed/idle.
 
+Assistant animation:
+
+- The assistant card appears once when the first visible assistant delta arrives.
+- New text appends without animating previous text.
+- The typing cursor blinks at a calm pace and pauses when the app is backgrounded.
+- Markdown block upgrades, such as a paragraph becoming a heading, should crossfade the affected block instead of flashing the whole card.
+- Long code blocks should not animate height repeatedly while streaming; reserve a stable block area once code formatting is detected.
+
 Internal message filtering:
 
 - Hide assistant messages starting with:
@@ -535,6 +621,13 @@ Timing:
 - Do not auto-expand new reasoning cards.
 - If reasoning is the latest item and no assistant answer has arrived yet, show a small active indicator in the card header.
 
+Reasoning animation:
+
+- Collapsed reasoning cards use a tiny pulse dot only while new reasoning text is arriving.
+- The preview line crossfades when it changes substantially.
+- Expanding reasoning uses a height animation capped at about 220 ms.
+- If the reasoning body is very long, expansion opens to a constrained height with internal scrolling instead of pushing the whole timeline far away.
+
 ### `tool.call.started`
 
 Payload shape:
@@ -569,12 +662,25 @@ Command display:
 - `cwd` appears in expanded body.
 - No output yet state: `Waiting for output...`.
 
+Command running animation:
+
+- In-progress shell cards show a small spinner or animated terminal cursor in the header.
+- Status pill gently pulses while running.
+- The card should not expand automatically on start.
+- In the first release, command output appears when the completed event arrives; before completion, keep the expanded output area at `Waiting for output...`.
+
 File change display:
 
 - Collapsed card labeled `Files changed`.
 - Status pill shows `inProgress`.
 - File list shows paths when available.
 - No diff yet state: `Preparing changes...`.
+
+File change running animation:
+
+- In-progress file cards show a small scanning-line accent on the left edge.
+- When completed, the accent becomes a static success or failure color.
+- Diff blocks fade in after completion; do not animate individual diff lines by default.
 
 Timing:
 
@@ -624,6 +730,13 @@ Command card display:
   - Output block.
   - Footer metadata: `exit 0`, `42ms`.
 
+Completion animation:
+
+- When a matching started card completes, spinner crossfades into success or failure icon.
+- Status pill updates with a short color transition.
+- If output appears for the first time, show the output preview with a fade-in.
+- Preserve card expansion state during the transition.
+
 Output presentation:
 
 - Empty output: show `No output`.
@@ -637,6 +750,7 @@ Failure presentation:
 - If `exitCode` is non-zero, status color is red.
 - Keep card collapsed by default.
 - Automatically expand a failed command only when it is the latest timeline item and no assistant explanation has arrived after it.
+- On automatic expansion for failure, use one short height animation and then stop; do not pulse the failed card continuously.
 
 ### `tool.call.completed` with `fileChange`
 
@@ -676,6 +790,12 @@ Display:
   - Diff blocks grouped by file.
   - Additions green, deletions red, context muted.
 
+Completion animation:
+
+- When file changes complete, file count and status update in place.
+- New diff blocks fade in as grouped blocks.
+- A completed success state may show a check mark for about 600 ms, then leave a static status pill.
+
 Timing:
 
 - Started file change card appears as soon as path or diff is known.
@@ -705,6 +825,12 @@ Display:
   - `commandExecution completed x2`
   - `reasoning completed x1`
 - Expanded body lists grouped rows.
+
+Animation:
+
+- Count changes animate with a small number crossfade.
+- The Activity row should not pulse unless at least one grouped item is currently `started`.
+- When a grouped segment completes, stop any spinner immediately.
 
 Timing:
 
@@ -840,6 +966,10 @@ Timing:
 - Composer remains editable.
 - Send is allowed only if HTTP is reachable; if send fails, keep draft.
 - Retry with exponential backoff.
+- The reconnecting banner uses a slow left-to-right progress sweep.
+- The status dot pulses amber while reconnecting.
+- After three failed reconnect attempts, banner text changes to `Still reconnecting...`.
+- After repeated failures, expose a `Retry now` action.
 
 ### Reconnected
 
@@ -848,6 +978,12 @@ Timing:
 3. Merge replayed events.
 4. Remove reconnecting banner.
 5. If events arrived while user was away from bottom, show `N new updates`.
+
+Reconnected animation:
+
+- Banner collapses upward over about 160 ms.
+- Status dot transitions back to green without pulsing.
+- If replayed events arrive, use normal new-event rules; do not show a separate success toast.
 
 ### Unauthorized During Chat
 
@@ -1021,6 +1157,17 @@ The timeline remains readable. Composer remains enabled, but failed sends preser
 - Composer keeps draft after send failure.
 - Voice state changes update the composer status row.
 
+### Motion And Feedback Tests
+
+- Send button swaps to progress state while send request is in flight.
+- Composer text clears only after send succeeds.
+- Failed send keeps draft visible and shows retry state.
+- Upload chip shows uploading, success, failed, retry, and removed states.
+- Assistant streaming updates the existing card rather than inserting repeated cards.
+- Tool started/completed transition preserves expansion state and updates status in place.
+- Reconnecting banner appears during socket retry and disappears after reconnect.
+- Reduced-motion mode disables shimmer, pulse, slide, and shake animations.
+
 ### Manual Device Checks
 
 - iPhone small screen with keyboard open.
@@ -1033,6 +1180,7 @@ The timeline remains readable. Composer remains enabled, but failed sends preser
 - Multiple image attachments.
 - Failed image upload.
 - Microphone permission denied.
+- Reduced-motion accessibility setting enabled.
 
 ## Implementation Boundaries
 
