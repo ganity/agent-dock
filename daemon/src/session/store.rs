@@ -32,22 +32,26 @@ impl SqliteSessionStore {
 
     pub async fn create_session(
         &self,
+        owner_user_id: String,
         root_id: String,
         workspace_path: String,
         source_kind: String,
         agent_kind: String,
+        title: Option<String>,
     ) -> anyhow::Result<String> {
         let id = format!("sess_{}", Uuid::new_v4());
 
         sqlx::query(
-            "insert into sessions (id, root_id, workspace_path, source_kind, agent_kind, runtime_session_id, status, created_at, updated_at)
-             values (?1, ?2, ?3, ?4, ?5, null, 'created', datetime('now'), datetime('now'))",
+            "insert into sessions (id, owner_user_id, root_id, workspace_path, source_kind, agent_kind, title, runtime_session_id, status, created_at, updated_at)
+             values (?1, ?2, ?3, ?4, ?5, ?6, ?7, null, 'created', datetime('now'), datetime('now'))",
         )
         .bind(&id)
+        .bind(owner_user_id)
         .bind(root_id)
         .bind(workspace_path)
         .bind(source_kind)
         .bind(agent_kind)
+        .bind(title)
         .execute(&self.pool)
         .await?;
 
@@ -62,7 +66,10 @@ impl SqliteSessionStore {
     ) -> anyhow::Result<()> {
         sqlx::query(
             "insert into session_events (session_id, event_type, payload_json, created_at)
-             values (?1, ?2, ?3, datetime('now'))",
+             select ?1, ?2, ?3, datetime('now')
+             from sessions
+             where id = ?1
+             limit 1",
         )
         .bind(session_id)
         .bind(event_type)
@@ -73,12 +80,14 @@ impl SqliteSessionStore {
         Ok(())
     }
 
-    pub async fn list_sessions(&self) -> anyhow::Result<Vec<SessionSummary>> {
+    pub async fn list_sessions(&self, owner_user_id: &str) -> anyhow::Result<Vec<SessionSummary>> {
         let rows = sqlx::query(
-            "select id, workspace_path, source_kind, agent_kind, runtime_session_id, status
+            "select id, owner_user_id, workspace_path, source_kind, agent_kind, title, runtime_session_id, status
              from sessions
+             where owner_user_id = ?1
              order by updated_at desc, id desc",
         )
+        .bind(owner_user_id)
         .fetch_all(&self.pool)
         .await?;
 
@@ -86,9 +95,11 @@ impl SqliteSessionStore {
             .into_iter()
             .map(|row| SessionSummary {
                 id: row.get("id"),
+                owner_user_id: row.get("owner_user_id"),
                 workspace_path: row.get("workspace_path"),
                 source_kind: row.get("source_kind"),
                 agent_kind: row.get("agent_kind"),
+                title: row.get("title"),
                 runtime_session_id: row.get("runtime_session_id"),
                 status: row.get("status"),
             })
@@ -154,8 +165,17 @@ impl SqliteSessionStore {
     }
 
     pub async fn load_snapshot(&self, session_id: &str) -> anyhow::Result<SessionSnapshot> {
+        self.load_snapshot_window(session_id, None, None).await
+    }
+
+    pub async fn load_snapshot_window(
+        &self,
+        session_id: &str,
+        limit: Option<usize>,
+        before: Option<i64>,
+    ) -> anyhow::Result<SessionSnapshot> {
         let session_row = sqlx::query(
-            "select id, root_id, workspace_path, source_kind, agent_kind, runtime_session_id, status
+            "select id, owner_user_id, root_id, workspace_path, source_kind, agent_kind, title, runtime_session_id, status
              from sessions
              where id = ?1",
         )
@@ -165,33 +185,128 @@ impl SqliteSessionStore {
 
         let session = SessionRecord {
             id: session_row.get("id"),
+            owner_user_id: session_row.get("owner_user_id"),
             root_id: session_row.get("root_id"),
             workspace_path: session_row.get("workspace_path"),
             source_kind: session_row.get("source_kind"),
             agent_kind: session_row.get("agent_kind"),
+            title: session_row.get("title"),
             runtime_session_id: session_row.get("runtime_session_id"),
             status: session_row.get("status"),
         };
 
-        let event_rows = sqlx::query(
-            "select id, event_type, payload_json
-             from session_events
-             where session_id = ?1
-             order by id asc",
-        )
-        .bind(session_id)
-        .fetch_all(&self.pool)
-        .await?;
+        let (events, has_more_history) = match limit {
+            Some(limit) => self.load_event_window(session_id, limit, before).await?,
+            None => {
+                let event_rows = sqlx::query(
+                    "select id, event_type, payload_json
+                     from session_events
+                     where session_id = ?1
+                     order by id asc",
+                )
+                .bind(session_id)
+                .fetch_all(&self.pool)
+                .await?;
 
-        let events = event_rows
+                let events = event_rows
+                    .into_iter()
+                    .map(|row| StoredEvent {
+                        id: row.get("id"),
+                        event_type: row.get("event_type"),
+                        payload_json: row.get("payload_json"),
+                    })
+                    .collect();
+
+                (events, false)
+            }
+        };
+
+        Ok(SessionSnapshot {
+            session,
+            events,
+            has_more_history,
+        })
+    }
+
+    pub async fn delete_session(&self, session_id: &str) -> anyhow::Result<bool> {
+        let mut transaction = self.pool.begin().await?;
+
+        sqlx::query("delete from session_events where session_id = ?1")
+            .bind(session_id)
+            .execute(&mut *transaction)
+            .await?;
+
+        let deleted = sqlx::query("delete from sessions where id = ?1")
+            .bind(session_id)
+            .execute(&mut *transaction)
+            .await?
+            .rows_affected()
+            > 0;
+
+        transaction.commit().await?;
+        Ok(deleted)
+    }
+
+    async fn load_event_window(
+        &self,
+        session_id: &str,
+        limit: usize,
+        before: Option<i64>,
+    ) -> anyhow::Result<(Vec<StoredEvent>, bool)> {
+        let limit = i64::try_from(limit)?;
+
+        let event_rows = if let Some(before) = before {
+            sqlx::query(
+                "select id, event_type, payload_json
+                 from session_events
+                 where session_id = ?1 and id < ?2
+                 order by id desc
+                 limit ?3",
+            )
+            .bind(session_id)
+            .bind(before)
+            .bind(limit)
+            .fetch_all(&self.pool)
+            .await?
+        } else {
+            sqlx::query(
+                "select id, event_type, payload_json
+                 from session_events
+                 where session_id = ?1
+                 order by id desc
+                 limit ?2",
+            )
+            .bind(session_id)
+            .bind(limit)
+            .fetch_all(&self.pool)
+            .await?
+        };
+
+        let mut events = event_rows
             .into_iter()
             .map(|row| StoredEvent {
                 id: row.get("id"),
                 event_type: row.get("event_type"),
                 payload_json: row.get("payload_json"),
             })
-            .collect();
+            .collect::<Vec<_>>();
+        events.reverse();
 
-        Ok(SessionSnapshot { session, events })
+        let has_more_history = if let Some(first) = events.first() {
+            let count = sqlx::query_scalar::<_, i64>(
+                "select count(1)
+                 from session_events
+                 where session_id = ?1 and id < ?2",
+            )
+            .bind(session_id)
+            .bind(first.id)
+            .fetch_one(&self.pool)
+            .await?;
+            count > 0
+        } else {
+            false
+        };
+
+        Ok((events, has_more_history))
     }
 }

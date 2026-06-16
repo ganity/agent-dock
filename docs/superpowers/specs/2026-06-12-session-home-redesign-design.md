@@ -42,7 +42,7 @@ The authenticated home becomes a single-purpose sessions launcher.
 The top block contains:
 
 - page title such as `Sessions`
-- one short supporting line explaining that these are local agent workspaces
+- one short supporting line explaining that these are local Agent Dock sessions
 
 This block should feel compact and confident, not like dashboard copy.
 

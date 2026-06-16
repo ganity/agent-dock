@@ -1,43 +1,74 @@
 import { useEffect, useState } from "react";
 import {
   attachSession,
-  connectEventStream,
+  connectSessionEvents,
+  connectVoiceInput,
   createSession,
+  deleteSession,
   fetchSessionSnapshot,
+  listDirectories,
   listRoots,
   listSessions,
   login,
+  restoreSession,
   sendSessionMessage,
+  uploadSessionAttachment,
 } from "./api";
 import { AttachSessionView } from "./components/AttachSessionView";
 import { CreateSessionView } from "./components/CreateSessionView";
 import { LoginView } from "./components/LoginView";
 import { SessionDetailView } from "./components/SessionDetailView";
 import { SessionListView } from "./components/SessionListView";
+import { getSessionTitle } from "./sessionDisplay";
 import type { SessionDetail, SessionEvent, SessionSummary, WorkspaceRoot } from "./types";
 
 export default function App() {
-  const [authenticated, setAuthenticated] = useState(false);
+  const [authState, setAuthState] = useState<"checking" | "authenticated" | "anonymous">("checking");
   const [roots, setRoots] = useState<WorkspaceRoot[]>([]);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [selectedSession, setSelectedSession] = useState<SessionDetail | null>(null);
+  const [loadingHistory, setLoadingHistory] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
   const [showCreateForm, setShowCreateForm] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
   const [showAttachForm, setShowAttachForm] = useState(false);
+  const [attachError, setAttachError] = useState<string | null>(null);
+  const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
 
-  async function refreshSessions(): Promise<void> {
-    setSessions(await listSessions());
+  function getErrorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
   }
 
-  async function refreshRoots(): Promise<void> {
-    setRoots(await listRoots());
+  async function refreshHomeData(): Promise<void> {
+    const [nextRoots, nextSessions] = await Promise.all([listRoots(), listSessions()]);
+    setRoots(nextRoots);
+    setSessions(nextSessions);
   }
+
+  function refreshHomeDataInBackground(): void {
+    void refreshHomeData().catch((error) => {
+      window.alert(getErrorMessage(error));
+    });
+  }
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        await restoreSession();
+        await refreshHomeData();
+        setAuthState("authenticated");
+        setLoginError(null);
+      } catch {
+        setAuthState("anonymous");
+      }
+    })();
+  }, []);
 
   useEffect(() => {
     if (!selectedSession) return;
 
     const lastEventId = selectedSession.events.at(-1)?.id ?? 0;
-    const socket = connectEventStream(selectedSession.id, lastEventId);
+    const socket = connectSessionEvents(selectedSession.id, lastEventId);
     socket.onmessage = (event) => {
       const nextEvent = JSON.parse(event.data) as SessionEvent;
       setSelectedSession((current) => {
@@ -57,43 +88,135 @@ export default function App() {
 
   return (
     <main className="shell">
-      {authenticated ? (
+      {authState === "checking" ? null : authState === "authenticated" ? (
         selectedSession ? (
           <SessionDetailView
             session={selectedSession}
-            onBack={() => setSelectedSession(null)}
-            onSend={(message) => {
-              void sendSessionMessage(selectedSession.id, message);
+            onBack={() => {
+              setSelectedSession(null);
+              refreshHomeDataInBackground();
             }}
+            onSend={(message, imagePaths) => {
+              void sendSessionMessage(selectedSession.id, message, imagePaths);
+            }}
+            onUploadImage={(file) => {
+              return uploadSessionAttachment(selectedSession.id, file);
+            }}
+            onConnectVoiceInput={() => connectVoiceInput()}
+            onLoadOlder={() => {
+              void (async () => {
+                if (loadingHistory) {
+                  return;
+                }
+
+                const oldestEventId = selectedSession.events[0]?.id;
+                if (!selectedSession.hasMoreHistory || !oldestEventId) {
+                  return;
+                }
+
+                setLoadingHistory(true);
+                try {
+                  const older = await fetchSessionSnapshot(selectedSession.id, {
+                    limit: 50,
+                    before: oldestEventId,
+                  });
+                  setSelectedSession((current) => {
+                    if (!current || current.id !== selectedSession.id) {
+                      return current;
+                    }
+
+                    const mergedEvents = [
+                      ...older.events,
+                      ...current.events.filter(
+                        (event) => !older.events.some((olderEvent) => olderEvent.id === event.id),
+                      ),
+                    ];
+
+                    return {
+                      ...current,
+                      hasMoreHistory: older.hasMoreHistory,
+                      events: mergedEvents,
+                    };
+                  });
+                } finally {
+                  setLoadingHistory(false);
+                }
+              })();
+            }}
+            loadingHistory={loadingHistory}
           />
         ) : (
           <section className="stack">
             <SessionListView
+              hasRoots={roots.length > 0}
               sessions={sessions}
               onCreate={() => {
                 setShowAttachForm(false);
+                setAttachError(null);
                 setShowCreateForm(true);
+                setCreateError(null);
+                refreshHomeDataInBackground();
               }}
               onAttach={() => {
                 setShowCreateForm(false);
+                setCreateError(null);
                 setShowAttachForm(true);
+                setAttachError(null);
+                refreshHomeDataInBackground();
               }}
               onSelect={(sessionId) => {
                 void (async () => {
-                  const detail = await fetchSessionSnapshot(sessionId);
+                  const detail = await fetchSessionSnapshot(sessionId, { limit: 50 });
+                  setLoadingHistory(false);
                   setSelectedSession(detail);
                 })();
               }}
+              onDelete={(sessionId) => {
+                const session = sessions.find((item) => item.id === sessionId);
+                if (!session) {
+                  return;
+                }
+
+                const title = getSessionTitle(session);
+                if (!window.confirm(`Delete ${title}? This stops the session and removes its data.`)) {
+                  return;
+                }
+
+                setDeletingSessionId(sessionId);
+                void (async () => {
+                  try {
+                    await deleteSession(sessionId);
+                    setSessions((current) => current.filter((item) => item.id !== sessionId));
+                    setSelectedSession((current) => (current?.id === sessionId ? null : current));
+                  } catch (error) {
+                    window.alert(getErrorMessage(error));
+                  } finally {
+                    setDeletingSessionId((current) => (current === sessionId ? null : current));
+                  }
+                })();
+              }}
+              deletingSessionId={deletingSessionId}
             />
             {showCreateForm ? (
               <CreateSessionView
                 roots={roots}
+                error={createError}
+                loadDirectories={listDirectories}
+                onCancel={() => {
+                  setShowCreateForm(false);
+                  setCreateError(null);
+                }}
                 onSubmit={(input) => {
                   void (async () => {
-                    const created = await createSession(input);
-                    setSessions((current) => [...current, created]);
-                    setShowCreateForm(false);
-                    setSelectedSession(created);
+                    try {
+                      const created = await createSession(input);
+                      setSessions((current) => [...current, created]);
+                      setShowCreateForm(false);
+                      setCreateError(null);
+                      setSelectedSession(created);
+                    } catch (error) {
+                      setCreateError(getErrorMessage(error));
+                    }
                   })();
                 }}
               />
@@ -101,12 +224,24 @@ export default function App() {
             {showAttachForm ? (
               <AttachSessionView
                 roots={roots}
+                error={attachError}
+                loadDirectories={listDirectories}
+                sessionCandidates={sessions}
+                onCancel={() => {
+                  setShowAttachForm(false);
+                  setAttachError(null);
+                }}
                 onSubmit={(input) => {
                   void (async () => {
-                    const attached = await attachSession(input);
-                    setSessions((current) => [...current, attached]);
-                    setShowAttachForm(false);
-                    setSelectedSession(attached);
+                    try {
+                      const attached = await attachSession(input);
+                      setSessions((current) => [...current, attached]);
+                      setShowAttachForm(false);
+                      setAttachError(null);
+                      setSelectedSession(attached);
+                    } catch (error) {
+                      setAttachError(getErrorMessage(error));
+                    }
                   })();
                 }}
               />
@@ -121,12 +256,11 @@ export default function App() {
             void (async () => {
               try {
                 await login(pin);
-                await refreshRoots();
-                await refreshSessions();
-                setAuthenticated(true);
+                await refreshHomeData();
+                setAuthState("authenticated");
                 setLoginError(null);
               } catch (error) {
-                setLoginError(error instanceof Error ? error.message : String(error));
+                setLoginError(getErrorMessage(error));
               }
             })();
           }}

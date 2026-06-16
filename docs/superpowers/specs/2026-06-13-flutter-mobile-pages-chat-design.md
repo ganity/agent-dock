@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Define the Flutter mobile app pages and the detailed Chat page display behavior for Agent Workspace. This document expands the existing Flutter mobile client design with screen-level UI requirements, event rendering rules, state transitions, and timing rules for live session updates.
+Define the Flutter mobile app pages and the detailed Chat page display behavior for Agent Dock. This document expands the existing Flutter mobile client design with screen-level UI requirements, event rendering rules, state transitions, and timing rules for live session updates.
 
 The goal is to make the mobile app feel like a purpose-built native workbench rather than a compact version of the Web UI.
 
@@ -10,6 +10,7 @@ The goal is to make the mobile app feel like a purpose-built native workbench ra
 
 The Flutter app consumes the existing daemon DTOs:
 
+- `CurrentUser`
 - `WorkspaceRoot`
 - `WorkspaceDirectoryListing`
 - `SessionSummary`
@@ -27,6 +28,18 @@ The Flutter app consumes the existing daemon DTOs:
 ```
 
 Flutter must keep raw events in session state and project them into mobile-specific timeline items. Projection is a UI concern; the daemon remains the source of truth.
+
+## Current Implementation Update
+
+This document is implemented with the current mobile platform direction:
+
+- The daemon is multi-user. All visible roots, sessions, events, attachments, and mutations are scoped to the authenticated user.
+- Login is username/password or an equivalent multi-user credential flow, not the earlier fixed-PIN flow.
+- Local mobile state is partitioned by `daemonUrl + userId` so one user's token, last session, drafts, and voice settings cannot bleed into another user.
+- `401` means the token is invalid or expired and routes to Login.
+- `403` means the user is authenticated but cannot access the requested resource and remains on the current screen with an inline error or banner.
+- Voice input connects directly from Flutter to Doubao ASR. The daemon does not proxy microphone audio.
+- Doubao long-lived credentials are never hard-coded into release builds. The app uses either user-provided credentials in secure storage or daemon-issued short-lived ASR session configuration.
 
 ## Global Presentation Model
 
@@ -110,7 +123,7 @@ Behavior:
 - If no daemon URL exists, route to Server Setup.
 - If daemon health check fails, route to Server Setup with the last URL prefilled and an inline error.
 - If token restore fails with unauthorized, route to Login.
-- If token restore succeeds, route to Sessions.
+- If token restore succeeds, store the returned current user and route to Sessions.
 
 ### 2. Server Setup Page
 
@@ -119,7 +132,7 @@ Purpose: connect the mobile app to a remote daemon.
 Display:
 
 - Title: `Connect daemon`.
-- Description: `Enter the HTTPS address of your remote Agent Workspace daemon.`
+- Description: `Enter the HTTPS address of your remote Agent Dock daemon.`
 - Single URL field.
 - `Test connection` primary button.
 - Secondary text button: `Use local development address`, available only in debug builds.
@@ -147,7 +160,7 @@ Failure behavior:
   - Invalid URL.
   - HTTPS required.
   - Cannot reach daemon.
-  - Daemon responded but does not look like Agent Workspace.
+  - Daemon responded but does not look like Agent Dock.
 
 ### 3. Login Page
 
@@ -157,18 +170,20 @@ Display:
 
 - Title: `Unlock workspace`.
 - Host pill showing the daemon host.
-- PIN field using numeric keyboard.
+- Username field.
+- Password field.
 - Primary button: `Sign in`.
 - Secondary action: `Change daemon`.
-- Error text below the PIN field.
+- Error text below the active credential field or above the primary button.
 
 Behavior:
 
 - Submit calls `POST /api/auth/login`.
 - On success, store token in secure storage and route to Sessions.
-- On invalid PIN, clear the PIN field and keep focus.
-- On network failure, keep PIN and show retryable error.
+- On invalid credentials, clear the password field and keep focus there.
+- On network failure, keep entered username and show retryable error.
 - On `Change daemon`, clear token but keep the previous URL in the Server Setup field.
+- If another user signs in on the same daemon, clear in-memory drafts and reload user-scoped roots and sessions.
 
 ### 4. Sessions Page
 
@@ -303,12 +318,15 @@ Purpose: manage daemon connection and app metadata.
 
 Display:
 
+- Current signed-in user.
 - Current daemon URL.
 - Connection status.
 - App version.
 - Daemon version when known.
+- Voice input configuration status.
 - Actions:
   - Test connection.
+  - Configure Doubao voice.
   - Change daemon.
   - Logout.
 
@@ -317,6 +335,7 @@ Behavior:
 - Logout clears token and in-memory drafts.
 - Change daemon clears token and routes to Server Setup.
 - If a session is streaming, show a confirmation before changing daemon.
+- Configure Doubao voice opens a secure settings sheet. User-provided Doubao credentials are stored in secure storage under `daemonUrl + userId`. If the daemon provides short-lived ASR session config instead, this sheet shows read-only provider status and a refresh/test action.
 
 ### 8. Chat Page
 
@@ -457,7 +476,7 @@ Attachment animation:
 Voice states:
 
 - Idle: microphone icon.
-- Connecting: disabled controls and `Connecting microphone...`.
+- Connecting: disabled controls and `Connecting Doubao voice...`.
 - Listening: active pulse ring and `Listening...`.
 - Stopping: `Finishing transcript...`.
 - Error: inline error with retry when useful.
@@ -471,6 +490,16 @@ Voice animation:
 - Stopping freezes the waveform and shows an inline spinner until the final transcript arrives.
 - Permission denied shows a static warning icon, not an infinite animation.
 - Canceling voice input fades out the status row and leaves any previously committed transcript text intact.
+
+Voice transport:
+
+- Flutter captures microphone audio locally.
+- Flutter opens the Doubao ASR WebSocket directly.
+- Flutter sends provider-required headers and binary audio frames.
+- Flutter encodes PCM 16 kHz mono audio into provider frames.
+- Flutter decodes provider responses into transcript text.
+- The daemon is not in the audio path.
+- If no safe Doubao credential source is configured, the microphone button is disabled and the status row says `Voice input is not configured`.
 
 ## Chat Timeline Projection
 
@@ -993,6 +1022,14 @@ Reconnected animation:
 4. Route to Login.
 5. After login, return to Sessions, not automatically back into Chat unless session restore is explicitly implemented later.
 
+### Forbidden During Chat
+
+1. Stop WebSocket.
+2. Keep token and current user.
+3. Show a banner: `You no longer have access to this session.`
+4. Disable composer actions for that session.
+5. Offer `Back to Sessions`.
+
 ### Leaving Chat
 
 - Close WebSocket.
@@ -1050,6 +1087,17 @@ Long press behavior:
 - Status updates should not spam screen readers during high-frequency streams.
 - Send, attach, voice, back, and menu buttons have explicit labels.
 - Code blocks and diffs are readable with dynamic text size, but may cap at a practical maximum to preserve layout.
+
+## Multi-User Data Rules
+
+- Sessions page shows only sessions visible to the current user.
+- Workspace selector shows only roots visible to the current user.
+- Attach candidates show only runtime sessions visible to the current user.
+- Chat snapshot requests that return `403` must not clear the user's auth token.
+- WebSocket event streams that return or close due to `403` must show forbidden state, not login.
+- Image attachment URLs and cached thumbnails are scoped to `daemonUrl + userId + sessionId`.
+- Logout clears token, current user, in-memory drafts, voice state, and cached session detail for that user.
+- Switching users on the same daemon reloads roots and sessions from scratch.
 
 ## Page-Specific Data Refresh Rules
 
@@ -1150,12 +1198,15 @@ The timeline remains readable. Composer remains enabled, but failed sends preser
 - Running sessions appear before completed sessions.
 - New Session sheet validates title and path.
 - Attach sheet fills values from recent session.
+- Login clears password and preserves username after invalid credentials.
+- User switch reloads user-scoped sessions and clears in-memory drafts.
 - Chat first load scrolls to bottom.
 - Older history prepends without visual jump.
 - New event chip appears when user is scrolled away from bottom.
 - Tool card expansion persists after lifecycle update.
 - Composer keeps draft after send failure.
 - Voice state changes update the composer status row.
+- Forbidden session access disables composer without logging out.
 
 ### Motion And Feedback Tests
 
@@ -1166,6 +1217,7 @@ The timeline remains readable. Composer remains enabled, but failed sends preser
 - Assistant streaming updates the existing card rather than inserting repeated cards.
 - Tool started/completed transition preserves expansion state and updates status in place.
 - Reconnecting banner appears during socket retry and disappears after reconnect.
+- Direct Doubao voice connection shows connecting, listening, stopping, transcript, and provider-error states.
 - Reduced-motion mode disables shimmer, pulse, slide, and shake animations.
 
 ### Manual Device Checks
@@ -1180,6 +1232,8 @@ The timeline remains readable. Composer remains enabled, but failed sends preser
 - Multiple image attachments.
 - Failed image upload.
 - Microphone permission denied.
+- Doubao voice credentials missing.
+- Doubao provider WebSocket error.
 - Reduced-motion accessibility setting enabled.
 
 ## Implementation Boundaries

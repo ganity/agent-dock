@@ -1,4 +1,7 @@
+import { useEffect, useLayoutEffect, useRef } from "react";
+
 import type { SessionDetail } from "../types";
+import { getSessionTitle } from "../sessionDisplay";
 import { projectTimelineEvents } from "../timeline";
 import { Composer } from "./Composer";
 import {
@@ -6,45 +9,142 @@ import {
   AssistantCard,
   AttachedSessionCard,
   FileChangeCard,
-  SessionSummaryCard,
-  StatusSummaryCard,
   ThinkingCard,
+  ToolCallCard,
   UserCard,
 } from "./TimelineCards";
 
 export function SessionDetailView(props: {
   session: SessionDetail;
   onBack: () => void;
-  onSend: (message: string) => void;
+  onSend: (message: string, imagePaths: string[]) => void;
+  onUploadImage: (file: File) => Promise<string>;
+  onConnectVoiceInput: () => WebSocket;
+  onLoadOlder: () => void | Promise<void>;
+  loadingHistory: boolean;
 }) {
+  const transcriptRef = useRef<HTMLElement | null>(null);
+  const shouldStickToBottomRef = useRef(true);
+  const lastSessionIdRef = useRef<string | null>(null);
+  const lastEventCountRef = useRef(0);
+  const prependAnchorRef = useRef<{ scrollHeight: number; scrollTop: number } | null>(null);
+  const wasNearBottomRef = useRef(true);
+
   const items = projectTimelineEvents(props.session.events ?? []);
+  const displayTitle = getSessionTitle(props.session);
   const latestStatus =
     findLatestNonEmptyStatus(items) ?? normalizeStatus(props.session.status) ?? props.session.status;
 
+  useLayoutEffect(() => {
+    const transcript = transcriptRef.current;
+    if (!transcript) {
+      return;
+    }
+
+    if (lastSessionIdRef.current !== props.session.id) {
+      lastSessionIdRef.current = props.session.id;
+      lastEventCountRef.current = props.session.events.length;
+      shouldStickToBottomRef.current = true;
+      transcript.scrollTop = transcript.scrollHeight;
+      return;
+    }
+
+    const previousCount = lastEventCountRef.current;
+    lastEventCountRef.current = props.session.events.length;
+    if (props.session.events.length <= previousCount) {
+      return;
+    }
+
+    if (wasNearBottomRef.current) {
+      transcript.scrollTop = transcript.scrollHeight;
+    }
+  }, [props.session.id, props.session.events]);
+
+  useLayoutEffect(() => {
+    const transcript = transcriptRef.current;
+    const anchor = prependAnchorRef.current;
+    if (!transcript || !anchor) {
+      return;
+    }
+
+    const nextScrollTop = transcript.scrollHeight - anchor.scrollHeight + anchor.scrollTop;
+    transcript.scrollTop = nextScrollTop;
+    prependAnchorRef.current = null;
+  }, [props.session.events]);
+
+  function isNearBottom(element: HTMLElement): boolean {
+    return element.scrollHeight - element.scrollTop - element.clientHeight <= 48;
+  }
+
+  function handleTranscriptScroll(event: React.UIEvent<HTMLElement>): void {
+    const transcript = event.currentTarget;
+    const nearBottom = isNearBottom(transcript);
+    shouldStickToBottomRef.current = nearBottom;
+    wasNearBottomRef.current = nearBottom;
+
+    if (
+      transcript.scrollTop <= 120 &&
+      props.session.hasMoreHistory &&
+      !props.loadingHistory
+    ) {
+      prependAnchorRef.current = {
+        scrollHeight: transcript.scrollHeight,
+        scrollTop: transcript.scrollTop,
+      };
+      props.onLoadOlder();
+    }
+  }
+
   return (
-    <section className="session-detail session-detail-view stack">
-      <header className="session-detail-topbar detail-topbar panel">
-        <button className="button back-button" type="button" onClick={props.onBack}>
-          Back
+    <section className="session-detail session-chat-workbench">
+      <header className="session-workbench-header">
+        <button
+          aria-label="Back"
+          className="session-back-button"
+          type="button"
+          onClick={props.onBack}
+        >
+          <span aria-hidden="true">&lt;</span>
         </button>
-        <div className="session-title detail-heading stack">
-          <p className="eyebrow">Session</p>
-          <h1>{props.session.agentKind}</h1>
-          <p className="muted">Session details</p>
-        </div>
+        <h1 className="session-heading-title">{displayTitle}</h1>
+        {latestStatus ? <span className="session-status-pill">{latestStatus}</span> : null}
+        <details className="session-menu">
+          <summary className="session-menu-button" aria-label="Session details" role="button">
+            <span aria-hidden="true">⋮</span>
+          </summary>
+          <div className="session-menu-panel">
+            <p className="session-menu-title">Details</p>
+            <dl className="session-menu-list">
+              <div>
+                <dt>Workspace</dt>
+                <dd>{props.session.workspacePath ?? "Session root unavailable"}</dd>
+              </div>
+              {props.session.sourceKind ? (
+                <div>
+                  <dt>Source</dt>
+                  <dd>source: {props.session.sourceKind}</dd>
+                </div>
+              ) : null}
+            </dl>
+          </div>
+        </details>
       </header>
 
-      <SessionSummaryCard
-        workspacePath={props.session.workspacePath}
-        sourceKind={props.session.sourceKind}
-        runtimeSessionId={props.session.runtimeSessionId}
-        status={latestStatus}
-      />
-
-      <section className="session-transcript detail-transcript stack">
+      <section
+        ref={transcriptRef}
+        className="session-transcript detail-transcript"
+        onScroll={handleTranscriptScroll}
+      >
         {items.map((item) => {
           if (item.kind === "user") {
-            return <UserCard key={item.id} text={item.text} />;
+            return (
+              <UserCard
+                key={item.id}
+                sessionId={props.session.id}
+                text={item.text}
+                imagePaths={item.imagePaths}
+              />
+            );
           }
           if (item.kind === "thinking") {
             return <ThinkingCard key={item.id} text={item.text} />;
@@ -52,8 +152,32 @@ export function SessionDetailView(props: {
           if (item.kind === "assistant") {
             return <AssistantCard key={item.id} text={item.text} />;
           }
+          if (item.kind === "tool_call") {
+            return (
+              <ToolCallCard
+                key={item.id}
+                toolName={item.toolName}
+                label={item.label}
+                summary={item.summary}
+                output={item.output}
+                status={item.status}
+                command={item.command}
+                cwd={item.cwd}
+                exitCode={item.exitCode}
+                durationMs={item.durationMs}
+              />
+            );
+          }
           if (item.kind === "file_change") {
-            return <FileChangeCard key={item.id} files={item.files} />;
+            return (
+              <FileChangeCard
+                key={item.id}
+                files={item.files}
+                summary={item.summary}
+                diffs={item.diffs}
+                status={item.status}
+              />
+            );
           }
           if (item.kind === "attached") {
             return <AttachedSessionCard key={item.id} runtimeSessionId={item.runtimeSessionId} />;
@@ -62,17 +186,17 @@ export function SessionDetailView(props: {
             return <ActivitySummaryCard key={item.id} groups={item.groups} />;
           }
           if (item.kind === "status_summary") {
-            const statuses = item.statuses.map(normalizeStatus).filter(isDefinedStatus);
-            if (statuses.length === 0) {
-              return null;
-            }
-            return <StatusSummaryCard key={item.id} statuses={statuses} />;
+            return null;
           }
           return null;
         })}
       </section>
 
-      <Composer onSend={props.onSend} />
+      <Composer
+        onSend={props.onSend}
+        onUploadImage={props.onUploadImage}
+        onConnectVoiceInput={props.onConnectVoiceInput}
+      />
     </section>
   );
 }
@@ -80,10 +204,6 @@ export function SessionDetailView(props: {
 function normalizeStatus(status?: string): string | undefined {
   const value = status?.trim();
   return value ? value : undefined;
-}
-
-function isDefinedStatus(status: string | undefined): status is string {
-  return status !== undefined;
 }
 
 function findLatestNonEmptyStatus(items: ReturnType<typeof projectTimelineEvents>): string | undefined {

@@ -1,6 +1,12 @@
 listen = "127.0.0.1:4123"
 pin = "1234"
-database_path = "./daemon-data/agent-workspace.sqlite3"
+database_path = "./daemon-data/agent-dock.sqlite3"
+
+[voice_input]
+websocket_url = "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async"
+app_id = "your-app-id"
+access_token = "your-access-token"
+resource_id = "volc.bigasr.sauc.duration"
 
 [[roots]]
 id = "workspace"

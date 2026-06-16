@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::session::model::StoredEvent;
 
@@ -17,7 +17,13 @@ pub struct CodexSessionProtocol {
     pending_thread_request_id: Option<String>,
     resume_thread_id: Option<String>,
     thread_id: Option<String>,
-    queued_messages: VecDeque<String>,
+    queued_messages: VecDeque<UserMessage>,
+}
+
+#[derive(Clone, Debug)]
+pub struct UserMessage {
+    pub text: String,
+    pub image_paths: Vec<String>,
 }
 
 impl CodexSessionProtocol {
@@ -51,9 +57,11 @@ impl CodexSessionProtocol {
         vec![build_initialize_request(&request_id)]
     }
 
-    pub fn enqueue_user_message(&mut self, message: String) -> anyhow::Result<Vec<Value>> {
+    pub fn enqueue_user_message(&mut self, message: UserMessage) -> anyhow::Result<Vec<Value>> {
         if let Some(thread_id) = &self.thread_id {
-            return Ok(vec![self.next_turn_start_request(thread_id.clone(), message)]);
+            return Ok(vec![
+                self.next_turn_start_request(thread_id.clone(), message),
+            ]);
         }
 
         self.queued_messages.push_back(message);
@@ -121,13 +129,13 @@ impl CodexSessionProtocol {
         })
     }
 
-    fn next_turn_start_request(&mut self, thread_id: String, message: String) -> Value {
+    fn next_turn_start_request(&mut self, thread_id: String, message: UserMessage) -> Value {
         let request_id = self.next_id("turn-start");
         build_turn_start_request(&request_id, &thread_id, &message)
     }
 
     fn next_id(&mut self, label: &str) -> String {
-        let id = format!("agent-workspace-{label}-{}", self.next_request_id);
+        let id = format!("agent-dock-{label}-{}", self.next_request_id);
         self.next_request_id += 1;
         id
     }
@@ -140,7 +148,7 @@ pub fn build_initialize_request(request_id: &str) -> Value {
         "method": "initialize",
         "params": {
             "clientInfo": {
-                "name": "agent-workspace",
+                "name": "agent-dock",
                 "version": "0.1.0"
             },
             "capabilities": {
@@ -181,19 +189,27 @@ pub fn build_thread_resume_request(request_id: &str, thread_id: &str, cwd: &str)
     })
 }
 
-pub fn build_turn_start_request(request_id: &str, thread_id: &str, message: &str) -> Value {
+pub fn build_turn_start_request(request_id: &str, thread_id: &str, message: &UserMessage) -> Value {
+    let mut input = vec![json!({
+        "type": "text",
+        "text": message.text
+    })];
+
+    input.extend(message.image_paths.iter().map(|path| {
+        json!({
+            "type": "localImage",
+            "path": path,
+            "detail": "auto"
+        })
+    }));
+
     json!({
         "jsonrpc": "2.0",
         "id": request_id,
         "method": "turn/start",
         "params": {
             "threadId": thread_id,
-            "input": [
-                {
-                    "type": "text",
-                    "text": message
-                }
-            ]
+            "input": input
         }
     })
 }
@@ -209,7 +225,13 @@ pub fn parse_notification_event(line: &str) -> anyhow::Result<Option<StoredEvent
     let params = envelope.params.unwrap_or_default();
 
     let event_type = match envelope.method.as_deref() {
-        Some("item/agentMessage/delta") => "assistant.message",
+        Some("item/agentMessage/delta") => {
+            if params.get("phase").and_then(Value::as_str) == Some("analysis") {
+                "assistant.thinking.delta"
+            } else {
+                "assistant.message"
+            }
+        }
         Some("item/reasoning/textDelta") => "assistant.thinking.delta",
         Some("item/completed") => "tool.call.completed",
         Some("item/started") => "tool.call.started",
@@ -218,7 +240,10 @@ pub fn parse_notification_event(line: &str) -> anyhow::Result<Option<StoredEvent
         _ => return Ok(None),
     };
 
-    if matches!(envelope.method.as_deref(), Some("item/started" | "item/completed")) {
+    if matches!(
+        envelope.method.as_deref(),
+        Some("item/started" | "item/completed")
+    ) {
         let item_type = params
             .get("item")
             .and_then(|item| item.get("type"))
@@ -232,10 +257,12 @@ pub fn parse_notification_event(line: &str) -> anyhow::Result<Option<StoredEvent
 
     let payload_json = match (envelope.method.as_deref(), params) {
         (Some("item/agentMessage/delta"), params) => {
-            json!({ "text": params.get("delta").and_then(Value::as_str).unwrap_or_default() }).to_string()
+            json!({ "text": params.get("delta").and_then(Value::as_str).unwrap_or_default() })
+                .to_string()
         }
         (Some("item/reasoning/textDelta"), params) => {
-            json!({ "text": params.get("delta").and_then(Value::as_str).unwrap_or_default() }).to_string()
+            json!({ "text": params.get("delta").and_then(Value::as_str).unwrap_or_default() })
+                .to_string()
         }
         (_, params) => params.to_string(),
     };

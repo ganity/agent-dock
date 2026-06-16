@@ -1,4 +1,4 @@
-# Agent Workspace
+# Agent Dock
 
 Single-user, browser-first coding workspace backed by a local Rust daemon.
 
@@ -39,8 +39,17 @@ The current branch also adds:
 
 ### Daemon
 
+The daemon loads config from these paths, in order:
+
+1. `AGENT_DOCK_CONFIG`
+2. `./daemon.local.toml`
+3. `./daemon.toml`
+4. `./daemon.example.toml`
+
+Use `daemon.local.toml` for machine-local secrets such as voice-input credentials.
+
 ```bash
-cargo run -p agent-workspace-daemon
+cargo run -p agent-dock-daemon
 ```
 
 ### Frontend
@@ -50,3 +59,31 @@ cd frontend
 npm install
 npm run dev
 ```
+
+### Flutter Mobile Environment
+
+Flutter is installed outside the repository at `/home/jhz/development/flutter`.
+Android SDK is installed outside the repository at `/home/jhz/Android/Sdk`.
+
+Use this shell setup before running mobile commands in non-login shells:
+
+```bash
+export PATH="$HOME/development/flutter/bin:$HOME/Android/Sdk/cmdline-tools/latest/bin:$HOME/Android/Sdk/platform-tools:$PATH"
+export ANDROID_HOME="$HOME/Android/Sdk"
+export ANDROID_SDK_ROOT="$HOME/Android/Sdk"
+```
+
+See `docs/superpowers/specs/2026-06-13-flutter-mobile-implementation-prerequisites.md`
+for the verified environment state and remaining desktop/web-only gaps.
+
+### Mobile
+
+```bash
+cd mobile
+flutter test
+dart analyze .
+flutter run
+```
+
+The current mobile app is a verified Flutter shell. It intentionally does not
+connect to daemon APIs until the daemon multi-user contract is implemented.

@@ -1,6 +1,6 @@
-use agent_workspace_daemon::adapters::codex_protocol::{
-    build_initialize_request, build_thread_resume_request, build_thread_start_request,
-    build_turn_start_request, parse_notification_event, CodexSessionProtocol,
+use agent_dock_daemon::adapters::codex_protocol::{
+    CodexSessionProtocol, UserMessage, build_initialize_request, build_thread_resume_request,
+    build_thread_start_request, build_turn_start_request, parse_notification_event,
 };
 
 #[test]
@@ -10,6 +10,7 @@ fn initialize_request_uses_initialize_method() {
     assert_eq!(request["jsonrpc"], "2.0");
     assert_eq!(request["id"], "req-1");
     assert_eq!(request["method"], "initialize");
+    assert_eq!(request["params"]["clientInfo"]["name"], "agent-dock");
 }
 
 #[test]
@@ -31,12 +32,39 @@ fn thread_resume_request_uses_thread_resume_method_and_thread_id() {
 
 #[test]
 fn turn_start_request_uses_text_user_input_shape() {
-    let request = build_turn_start_request("req-3", "thread-1", "hello world");
+    let request = build_turn_start_request(
+        "req-3",
+        "thread-1",
+        &UserMessage {
+            text: "hello world".into(),
+            image_paths: Vec::new(),
+        },
+    );
 
     assert_eq!(request["method"], "turn/start");
     assert_eq!(request["params"]["threadId"], "thread-1");
     assert_eq!(request["params"]["input"][0]["type"], "text");
     assert_eq!(request["params"]["input"][0]["text"], "hello world");
+}
+
+#[test]
+fn turn_start_request_includes_local_image_inputs_after_text() {
+    let request = build_turn_start_request(
+        "req-3",
+        "thread-1",
+        &UserMessage {
+            text: "explain this screenshot".into(),
+            image_paths: vec!["/tmp/agent-dock/image.png".into()],
+        },
+    );
+
+    assert_eq!(request["params"]["input"][0]["type"], "text");
+    assert_eq!(request["params"]["input"][1]["type"], "localImage");
+    assert_eq!(
+        request["params"]["input"][1]["path"],
+        "/tmp/agent-dock/image.png"
+    );
+    assert_eq!(request["params"]["input"][1]["detail"], "auto");
 }
 
 #[test]
@@ -52,11 +80,19 @@ fn parse_notification_event_maps_real_codex_methods() {
 }
 
 #[test]
+fn parse_notification_event_maps_analysis_agent_delta_to_thinking() {
+    let reasoning = r#"{"method":"item/agentMessage/delta","params":{"delta":"inspect context","itemId":"i1","threadId":"t1","turnId":"u1","phase":"analysis"}}"#;
+
+    let event = parse_notification_event(reasoning).unwrap().unwrap();
+
+    assert_eq!(event.event_type, "assistant.thinking.delta");
+    assert!(event.payload_json.contains("inspect context"));
+}
+
+#[test]
 fn parse_notification_event_ignores_user_and_agent_message_item_lifecycle() {
-    let user_started =
-        r#"{"method":"item/started","params":{"item":{"id":"u1","type":"userMessage"},"threadId":"t1","turnId":"x","startedAtMs":1}}"#;
-    let agent_completed =
-        r#"{"method":"item/completed","params":{"item":{"id":"a1","type":"agentMessage"},"threadId":"t1","turnId":"x","completedAtMs":2}}"#;
+    let user_started = r#"{"method":"item/started","params":{"item":{"id":"u1","type":"userMessage"},"threadId":"t1","turnId":"x","startedAtMs":1}}"#;
+    let agent_completed = r#"{"method":"item/completed","params":{"item":{"id":"a1","type":"agentMessage"},"threadId":"t1","turnId":"x","completedAtMs":2}}"#;
 
     assert!(parse_notification_event(user_started).unwrap().is_none());
     assert!(parse_notification_event(agent_completed).unwrap().is_none());
@@ -64,8 +100,7 @@ fn parse_notification_event_ignores_user_and_agent_message_item_lifecycle() {
 
 #[test]
 fn parse_notification_event_keeps_real_tool_lifecycle() {
-    let tool_started =
-        r#"{"method":"item/started","params":{"item":{"id":"tool-1","type":"local_shell_call"},"threadId":"t1","turnId":"x","startedAtMs":1}}"#;
+    let tool_started = r#"{"method":"item/started","params":{"item":{"id":"tool-1","type":"local_shell_call"},"threadId":"t1","turnId":"x","startedAtMs":1}}"#;
 
     let event = parse_notification_event(tool_started).unwrap().unwrap();
 
@@ -81,39 +116,53 @@ fn protocol_bootstraps_thread_and_flushes_queued_messages() {
     assert_eq!(bootstrap.len(), 1);
     assert_eq!(bootstrap[0]["method"], "initialize");
 
-    let queued = protocol.enqueue_user_message("hello world".into()).unwrap();
+    let queued = protocol
+        .enqueue_user_message(UserMessage {
+            text: "hello world".into(),
+            image_paths: Vec::new(),
+        })
+        .unwrap();
     assert!(queued.is_empty());
 
-    let init_response = r#"{"jsonrpc":"2.0","id":"agent-workspace-initialize-1","result":{}}"#;
+    let init_response = r#"{"jsonrpc":"2.0","id":"agent-dock-initialize-1","result":{}}"#;
     let init_result = protocol.handle_server_line(init_response).unwrap();
     assert_eq!(init_result.outgoing.len(), 1);
     assert_eq!(init_result.outgoing[0]["method"], "thread/start");
 
-    let thread_response = r#"{"jsonrpc":"2.0","id":"agent-workspace-thread-start-2","result":{"thread":{"id":"thread-1"}}}"#;
+    let thread_response = r#"{"jsonrpc":"2.0","id":"agent-dock-thread-start-2","result":{"thread":{"id":"thread-1"}}}"#;
     let thread_result = protocol.handle_server_line(thread_response).unwrap();
     assert_eq!(thread_result.outgoing.len(), 1);
     assert_eq!(thread_result.outgoing[0]["method"], "turn/start");
     assert_eq!(thread_result.outgoing[0]["params"]["threadId"], "thread-1");
-    assert_eq!(thread_result.outgoing[0]["params"]["input"][0]["text"], "hello world");
+    assert_eq!(
+        thread_result.outgoing[0]["params"]["input"][0]["text"],
+        "hello world"
+    );
 }
 
 #[test]
 fn attached_protocol_bootstraps_resume_and_flushes_queued_messages() {
-    let mut protocol = CodexSessionProtocol::new_attached("/tmp/workspace".into(), "thread-1".into());
+    let mut protocol =
+        CodexSessionProtocol::new_attached("/tmp/workspace".into(), "thread-1".into());
 
     let bootstrap = protocol.bootstrap_requests();
     assert_eq!(bootstrap.len(), 1);
     assert_eq!(bootstrap[0]["method"], "initialize");
 
-    let queued = protocol.enqueue_user_message("hello world".into()).unwrap();
+    let queued = protocol
+        .enqueue_user_message(UserMessage {
+            text: "hello world".into(),
+            image_paths: Vec::new(),
+        })
+        .unwrap();
     assert!(queued.is_empty());
 
-    let init_response = r#"{"jsonrpc":"2.0","id":"agent-workspace-initialize-1","result":{}}"#;
+    let init_response = r#"{"jsonrpc":"2.0","id":"agent-dock-initialize-1","result":{}}"#;
     let init_result = protocol.handle_server_line(init_response).unwrap();
     assert_eq!(init_result.outgoing.len(), 1);
     assert_eq!(init_result.outgoing[0]["method"], "thread/resume");
 
-    let thread_response = r#"{"jsonrpc":"2.0","id":"agent-workspace-thread-resume-2","result":{"thread":{"id":"thread-1"}}}"#;
+    let thread_response = r#"{"jsonrpc":"2.0","id":"agent-dock-thread-resume-2","result":{"thread":{"id":"thread-1"}}}"#;
     let thread_result = protocol.handle_server_line(thread_response).unwrap();
     assert_eq!(thread_result.outgoing.len(), 1);
     assert_eq!(thread_result.outgoing[0]["method"], "turn/start");

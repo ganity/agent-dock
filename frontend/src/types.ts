@@ -1,5 +1,6 @@
 export interface SessionSummary {
   id: string;
+  title?: string | null;
   agentKind: string;
   sourceKind?: string;
   runtimeSessionId?: string;
@@ -13,9 +14,21 @@ export interface WorkspaceRoot {
   path: string;
 }
 
+export interface WorkspaceDirectory {
+  name: string;
+  path: string;
+}
+
+export interface WorkspaceDirectoryListing {
+  currentPath: string;
+  parentPath?: string | null;
+  directories: WorkspaceDirectory[];
+}
+
 export interface CreateSessionInput {
   rootId: string;
   path: string;
+  title: string;
   agentKind: string;
 }
 
@@ -34,10 +47,12 @@ export interface SessionEvent {
 
 export interface SessionDetail {
   id: string;
+  title?: string | null;
   agentKind: string;
   sourceKind?: string;
   runtimeSessionId?: string;
   workspacePath?: string;
   status?: string;
+  hasMoreHistory?: boolean;
   events: SessionEvent[];
 }

@@ -16,7 +16,7 @@ export function LoginView(props: {
       }}
     >
       <div className="stack">
-        <h1>Agent Workspace</h1>
+        <h1>Agent Dock</h1>
         <p className="muted">Unlock your local daemon with the device PIN.</p>
       </div>
       <label className="field">

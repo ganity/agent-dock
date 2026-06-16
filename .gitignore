@@ -1,5 +1,12 @@
 /target
 /frontend/node_modules
+/node_modules/
 /frontend/dist
 /daemon-data
+/daemon/daemon-data/
+/daemon.local.toml
 /.superpowers
+.codex/
+docs/
+/mobile/flutter_*.log
+/mobile/android/local.properties

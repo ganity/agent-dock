@@ -2,7 +2,16 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize)]
 pub struct LoginRequest {
-    pub pin: String,
+    pub pin: Option<String>,
+    pub username: Option<String>,
+    pub password: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct CurrentUserDto {
+    pub id: String,
+    #[serde(rename = "displayName")]
+    pub display_name: String,
 }
 
 #[derive(Deserialize)]
@@ -12,11 +21,14 @@ pub struct CreateSessionRequest {
     pub path: String,
     #[serde(rename = "agentKind")]
     pub agent_kind: String,
+    pub title: Option<String>,
 }
 
 #[derive(Deserialize)]
 pub struct SendMessageRequest {
     pub message: String,
+    #[serde(rename = "imagePaths", default)]
+    pub image_paths: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -38,6 +50,21 @@ pub struct WorkspaceRootDto {
 }
 
 #[derive(Serialize)]
+pub struct WorkspaceDirectoryDto {
+    pub name: String,
+    pub path: String,
+}
+
+#[derive(Serialize)]
+pub struct WorkspaceDirectoryListingDto {
+    #[serde(rename = "currentPath")]
+    pub current_path: String,
+    #[serde(rename = "parentPath")]
+    pub parent_path: Option<String>,
+    pub directories: Vec<WorkspaceDirectoryDto>,
+}
+
+#[derive(Serialize)]
 pub struct SessionEventDto {
     pub id: i64,
     #[serde(rename = "eventType")]
@@ -52,11 +79,14 @@ pub struct SessionSnapshotDto {
     pub agent_kind: String,
     #[serde(rename = "sourceKind")]
     pub source_kind: String,
+    pub title: Option<String>,
     #[serde(rename = "runtimeSessionId")]
     pub runtime_session_id: Option<String>,
     #[serde(rename = "workspacePath")]
     pub workspace_path: String,
     pub status: String,
+    #[serde(rename = "hasMoreHistory")]
+    pub has_more_history: bool,
     pub events: Vec<SessionEventDto>,
 }
 
@@ -67,6 +97,7 @@ pub struct SessionSummaryDto {
     pub agent_kind: String,
     #[serde(rename = "sourceKind")]
     pub source_kind: String,
+    pub title: Option<String>,
     #[serde(rename = "runtimeSessionId")]
     pub runtime_session_id: Option<String>,
     pub status: String,

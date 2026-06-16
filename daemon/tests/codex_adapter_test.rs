@@ -1,4 +1,4 @@
-use agent_workspace_daemon::adapters::codex::parse_codex_rpc_line;
+use agent_dock_daemon::adapters::codex::parse_codex_rpc_line;
 
 #[test]
 fn codex_rpc_maps_message_and_file_change_events() {

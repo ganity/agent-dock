@@ -1,5 +1,5 @@
 {
-  "name": "@agent-workspace/frontend",
+  "name": "@agent-dock/frontend",
   "private": true,
   "type": "module",
   "scripts": {

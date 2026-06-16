@@ -4,7 +4,7 @@ use axum::body::{to_bytes, Body};
 use axum::http::{Request, StatusCode};
 use tower::ServiceExt;
 
-use agent_workspace_daemon::{
+use agent_dock_daemon::{
     adapters::process::{spawn_command, LaunchCommand},
     app::{build_test_router, build_test_router_with_spawner},
 };
@@ -44,7 +44,9 @@ async fn attach_session_creates_local_record_bound_to_existing_runtime_id() {
 
     assert_eq!(attach.status(), StatusCode::OK);
     let body = to_bytes(attach.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     let text = String::from_utf8(body.to_vec()).unwrap();
+    assert_eq!(json["title"], serde_json::Value::Null);
     assert!(text.contains("\"agentKind\":\"claude\""));
     assert!(text.contains("\"session.attached\""));
 }
@@ -56,8 +58,8 @@ async fn attached_codex_session_can_resume_and_emit_assistant_message() {
             program: "sh".into(),
             args: vec![
                 "-lc".into(),
-                "IFS= read -r _init; printf '%s\n' '{\"jsonrpc\":\"2.0\",\"id\":\"agent-workspace-initialize-1\",\"result\":{}}'; \
-                 IFS= read -r _resume; printf '%s\n' '{\"jsonrpc\":\"2.0\",\"id\":\"agent-workspace-thread-resume-2\",\"result\":{\"thread\":{\"id\":\"thread-abc\"}}}'; \
+                "IFS= read -r _init; printf '%s\n' '{\"jsonrpc\":\"2.0\",\"id\":\"agent-dock-initialize-1\",\"result\":{}}'; \
+                 IFS= read -r _resume; printf '%s\n' '{\"jsonrpc\":\"2.0\",\"id\":\"agent-dock-thread-resume-2\",\"result\":{\"thread\":{\"id\":\"thread-abc\"}}}'; \
                  IFS= read -r _turn; printf '%s\n' '{\"method\":\"item/agentMessage/delta\",\"params\":{\"delta\":\"attached reply\",\"itemId\":\"i1\",\"threadId\":\"thread-abc\",\"turnId\":\"turn-1\"}}'".into(),
             ],
         })

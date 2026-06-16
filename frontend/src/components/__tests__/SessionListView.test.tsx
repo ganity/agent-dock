@@ -1,43 +1,156 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { SessionListView } from "../SessionListView";
 
+afterEach(() => {
+  cleanup();
+});
+
 describe("SessionListView", () => {
-    it("renders session metadata and exposes the create action", () => {
-        const onCreate = vi.fn();
-        const onAttach = vi.fn();
-        const onSelect = vi.fn();
+  it("renders launcher structure with clickable session cards and chip metadata", () => {
+    const onCreate = vi.fn();
+    const onAttach = vi.fn();
+    const onSelect = vi.fn();
+    const onDelete = vi.fn();
 
-        render(
-            <SessionListView
-                sessions={[{
-                    id: "sess-1",
-                    agentKind: "codex",
-                    status: "running",
-                    workspacePath: "apps/api",
-                    sourceKind: "attached",
-                    runtimeSessionId: "thread-abc",
-                }]}
-                onCreate={onCreate}
-                onAttach={onAttach}
-                onSelect={onSelect}
-            />,
-        );
+    render(
+      <SessionListView
+        hasRoots
+        sessions={[
+          {
+            id: "sess-1",
+            title: "Launch Pad",
+            agentKind: "codex",
+            sourceKind: "attached",
+            status: "running",
+            workspacePath: "apps/api",
+            runtimeSessionId: "thread-abc",
+          },
+        ]}
+        onCreate={onCreate}
+        onAttach={onAttach}
+        onSelect={onSelect}
+        onDelete={onDelete}
+      />,
+    );
 
-        expect(screen.getByText("codex")).toBeInTheDocument();
-        expect(screen.getByText("running")).toBeInTheDocument();
-        expect(screen.getByText("apps/api")).toBeInTheDocument();
-        expect(screen.getByText("attached")).toBeInTheDocument();
-        expect(screen.getByText("thread-abc")).toBeInTheDocument();
+    const launcher = screen.getByRole("heading", { level: 1, name: "Sessions" }).closest("section");
+    expect(launcher).toHaveClass("session-home");
 
-        fireEvent.click(screen.getByRole("button", { name: "New session" }));
-        expect(onCreate).toHaveBeenCalledTimes(1);
+    const header = screen.getByRole("heading", { level: 1, name: "Sessions" }).closest("header");
+    expect(header).toHaveClass("session-home-header");
+    expect(screen.getByText("Local control surface")).toHaveClass("eyebrow");
+    expect(
+      screen.queryByText("Recent agent workspaces on this machine, ready to resume."),
+    ).not.toBeInTheDocument();
 
-        fireEvent.click(screen.getByRole("button", { name: "Attach session" }));
-        expect(onAttach).toHaveBeenCalledTimes(1);
+    const newSessionButton = screen.getByRole("button", { name: /^New$/i });
+    expect(newSessionButton).toHaveClass("session-action-card", "session-action-card-primary");
+    expect(newSessionButton.querySelector("strong")).toHaveTextContent("New");
+    expect(newSessionButton.querySelector("small")).toBeNull();
 
-        fireEvent.click(screen.getByRole("button", { name: "Open codex" }));
-        expect(onSelect).toHaveBeenCalledWith("sess-1");
-    });
+    const attachSessionButton = screen.getByRole("button", { name: /^Attach$/i });
+    expect(attachSessionButton).toHaveClass("session-action-card");
+    expect(attachSessionButton.querySelector("strong")).toHaveTextContent("Attach");
+    expect(attachSessionButton.querySelector("small")).toBeNull();
+
+    fireEvent.click(newSessionButton);
+    expect(onCreate).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(attachSessionButton);
+    expect(onAttach).toHaveBeenCalledTimes(1);
+
+    expect(screen.getByRole("list", { name: "Sessions" })).toHaveClass("session-card-list");
+
+    const sessionCard = screen.getByRole("button", { name: "Open Launch Pad" });
+    const menuButton = screen.getByRole("button", { name: "More actions for Launch Pad" });
+    expect(sessionCard).toHaveClass("session-card");
+    expect(sessionCard.querySelector(".session-card-main")).not.toBeNull();
+    expect(sessionCard.querySelector(".session-card-title-row")).not.toBeNull();
+    expect(sessionCard.querySelector("h2")).toBeNull();
+    expect(sessionCard.querySelector(".session-card-title")).toHaveTextContent("Launch Pad");
+    expect(sessionCard).toHaveAccessibleDescription(
+      "Status: running Workspace: apps/api Agent: codex Source: attached",
+    );
+
+    expect(sessionCard.querySelector(".session-chip-status")).toHaveTextContent("running");
+    expect(sessionCard.querySelector(".session-chip-status")?.tagName).toBe("SPAN");
+    expect(sessionCard.querySelector(".session-card-path")).toHaveTextContent("apps/api");
+    expect(sessionCard.querySelector(".session-chip-row")).not.toBeNull();
+
+    const metadataChips = Array.from(sessionCard.querySelectorAll(".session-chip-row .session-chip"));
+    expect(metadataChips).toHaveLength(2);
+    expect(metadataChips[0]).toHaveTextContent("codex");
+    expect(metadataChips[1]).toHaveTextContent("attached");
+
+    expect(sessionCard.querySelector(".session-runtime-id")).toBeNull();
+    expect(sessionCard.querySelector(".session-card-arrow")).toBeNull();
+
+    fireEvent.click(sessionCard);
+    expect(onSelect).toHaveBeenCalledWith("sess-1");
+
+    fireEvent.click(menuButton);
+    const deleteButton = screen.getByRole("button", { name: "Delete Launch Pad" });
+    fireEvent.click(deleteButton);
+    expect(onDelete).toHaveBeenCalledWith("sess-1");
+  });
+
+  it("uses fallback titles and renders the empty/root warning structure when roots are unavailable", () => {
+    const onCreate = vi.fn();
+    const onAttach = vi.fn();
+    const onSelect = vi.fn();
+    const onDelete = vi.fn();
+
+    const { rerender } = render(
+      <SessionListView
+        hasRoots
+        sessions={[
+          {
+            id: "sess-2",
+            agentKind: "claude",
+            workspacePath: "apps/web",
+          },
+        ]}
+        onCreate={onCreate}
+        onAttach={onAttach}
+        onSelect={onSelect}
+        onDelete={onDelete}
+      />,
+    );
+
+    const fallbackCard = screen.getByRole("button", { name: "Open web" });
+    expect(fallbackCard.querySelector("h2")).toBeNull();
+    expect(fallbackCard.querySelector(".session-card-title")).toHaveTextContent("web");
+    expect(fallbackCard.querySelector(".session-card-path")).toHaveTextContent("apps/web");
+    expect(fallbackCard).toHaveAccessibleDescription("Workspace: apps/web Agent: claude");
+
+    const fallbackChips = Array.from(fallbackCard.querySelectorAll(".session-chip-row .session-chip"));
+    expect(fallbackChips).toHaveLength(1);
+    expect(fallbackChips[0]).toHaveTextContent("claude");
+    expect(fallbackCard.querySelector(".session-chip-status")).toBeNull();
+    expect(fallbackCard.querySelector(".session-runtime-id")).toBeNull();
+
+    rerender(
+      <SessionListView
+        hasRoots={false}
+        sessions={[]}
+        onCreate={onCreate}
+        onAttach={onAttach}
+        onSelect={onSelect}
+        onDelete={onDelete}
+      />,
+    );
+
+    const emptyState = screen.getByText("No sessions yet").closest("section");
+    expect(emptyState).toHaveClass("session-empty-card");
+    expect(
+      screen.getByText("Create a managed session or attach an existing runtime to get started."),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^New$/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^Attach$/i })).toBeDisabled();
+    expect(
+      screen.getByText("Add a workspace root before creating or attaching sessions."),
+    ).toHaveClass("session-root-warning");
+  });
 });

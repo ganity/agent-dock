@@ -1,23 +1,27 @@
-use agent_workspace_daemon::session::store::SqliteSessionStore;
+use agent_dock_daemon::session::store::SqliteSessionStore;
 
 #[tokio::test]
 async fn store_lists_sessions_and_events_after_cursor() {
     let store = SqliteSessionStore::in_memory().await.unwrap();
     let first = store
         .create_session(
+            "usr_workspace".into(),
             "workspace".into(),
             "repo-a".into(),
             "managed".into(),
             "claude".into(),
+            None,
         )
         .await
         .unwrap();
     let second = store
         .create_session(
+            "usr_workspace".into(),
             "workspace".into(),
             "repo-b".into(),
             "managed".into(),
             "codex".into(),
+            None,
         )
         .await
         .unwrap();
@@ -35,7 +39,7 @@ async fn store_lists_sessions_and_events_after_cursor() {
         .await
         .unwrap();
 
-    let sessions = store.list_sessions().await.unwrap();
+    let sessions = store.list_sessions("usr_workspace").await.unwrap();
     let after_first = store.events_after(&first, 1).await.unwrap();
 
     assert_eq!(sessions.len(), 2);

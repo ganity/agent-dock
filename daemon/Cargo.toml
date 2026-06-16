@@ -1,28 +1,31 @@
 [package]
-name = "agent-workspace-daemon"
+name = "agent-dock-daemon"
 version = "0.1.0"
 edition = "2024"
 
 [lib]
-name = "agent_workspace_daemon"
+name = "agent_dock_daemon"
 path = "src/lib.rs"
 
 [[bin]]
-name = "agent-workspace-daemon"
+name = "agent-dock-daemon"
 path = "src/main.rs"
 
 [dependencies]
 anyhow = "1.0"
 axum = { version = "0.8", features = ["macros", "ws"] }
+flate2 = "1.1"
+futures-util = "0.3"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite", "macros"] }
 tokio = { version = "1.47", features = ["macros", "rt-multi-thread", "net", "io-util", "process", "time"] }
+tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
+toml = "0.8"
 tower = "0.5"
+urlencoding = "2.1"
 uuid = { version = "1.18", features = ["v4"] }
 
 [dev-dependencies]
-futures-util = "0.3"
 tempfile = "3.20"
-tokio-tungstenite = "0.28"
 tower = { version = "0.5", features = ["util"] }

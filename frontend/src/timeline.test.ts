@@ -58,6 +58,246 @@ describe("projectTimelineEvents", () => {
     ]);
   });
 
+  it("projects completed command execution details with terminal output", () => {
+    const events: SessionEvent[] = [
+      {
+        id: 1,
+        eventType: "tool.call.completed",
+        payload: {
+          item: {
+            id: "cmd-1",
+            type: "commandExecution",
+            command: "/bin/zsh -lc npm test",
+            cwd: "/tmp/workspace",
+            status: "completed",
+            commandActions: [{ type: "runCommand", command: "npm test", path: null }],
+            aggregatedOutput: "PASS src/app.test.ts\n",
+            exitCode: 0,
+            durationMs: 42,
+          },
+        },
+      },
+    ];
+
+    expect(projectTimelineEvents(events)).toEqual([
+      {
+        id: "tool:cmd-1",
+        kind: "tool_call",
+        toolName: "shell",
+        label: "npm test",
+        summary: "Ran npm test",
+        output: "PASS src/app.test.ts",
+        status: "completed",
+        command: "/bin/zsh -lc npm test",
+        cwd: "/tmp/workspace",
+        exitCode: 0,
+        durationMs: 42,
+      },
+    ]);
+  });
+
+  it("updates a command execution lifecycle item instead of rendering started and completed separately", () => {
+    const events: SessionEvent[] = [
+      {
+        id: 1,
+        eventType: "tool.call.started",
+        payload: {
+          item: {
+            id: "cmd-1",
+            type: "commandExecution",
+            command: "/bin/zsh -lc npm test",
+            status: "inProgress",
+          },
+        },
+      },
+      {
+        id: 2,
+        eventType: "tool.call.completed",
+        payload: {
+          item: {
+            id: "cmd-1",
+            type: "commandExecution",
+            command: "/bin/zsh -lc npm test",
+            status: "completed",
+            aggregatedOutput: "PASS\n",
+            exitCode: 0,
+          },
+        },
+      },
+    ];
+
+    expect(projectTimelineEvents(events)).toEqual([
+      {
+        id: "tool:cmd-1",
+        kind: "tool_call",
+        toolName: "shell",
+        label: "npm test",
+        summary: "Ran npm test",
+        output: "PASS",
+        status: "completed",
+        command: "/bin/zsh -lc npm test",
+        exitCode: 0,
+      },
+    ]);
+  });
+
+  it("filters internal system prompt and context assistant messages", () => {
+    const events: SessionEvent[] = [
+      {
+        id: 1,
+        eventType: "assistant.message",
+        payload: { text: "You are Codex, a coding agent based on GPT-5." },
+      },
+      {
+        id: 2,
+        eventType: "assistant.message",
+        payload: { text: "<environment_context>\n  <cwd>/tmp/workspace</cwd>\n</environment_context>" },
+      },
+      { id: 3, eventType: "assistant.message", payload: { text: "Visible reply" } },
+    ];
+
+    expect(projectTimelineEvents(events)).toEqual([
+      { id: "assistant:3", kind: "assistant", text: "Visible reply" },
+    ]);
+  });
+
+  it("keeps only diff hunks from verbose tool output when a patch is present", () => {
+    const events: SessionEvent[] = [
+      {
+        id: 1,
+        eventType: "tool.call.completed",
+        payload: {
+          item: {
+            id: "cmd-1",
+            type: "commandExecution",
+            command: "/bin/zsh -lc apply_patch",
+            status: "completed",
+            aggregatedOutput: [
+              "Reading full file content...",
+              "diff --git a/src/app.ts b/src/app.ts",
+              "@@",
+              "-old",
+              "+new",
+              "Full file content that should not be shown",
+            ].join("\n"),
+          },
+        },
+      },
+    ];
+
+    expect(projectTimelineEvents(events)).toEqual([
+      {
+        id: "tool:cmd-1",
+        kind: "tool_call",
+        toolName: "shell",
+        label: "apply_patch",
+        summary: "Applied patch",
+        output: "diff --git a/src/app.ts b/src/app.ts\n@@\n-old\n+new",
+        status: "completed",
+        command: "/bin/zsh -lc apply_patch",
+      },
+    ]);
+  });
+
+  it("projects completed file changes with patch diffs", () => {
+    const events: SessionEvent[] = [
+      {
+        id: 1,
+        eventType: "tool.call.completed",
+        payload: {
+          item: {
+            id: "patch-1",
+            type: "fileChange",
+            status: "completed",
+            changes: [
+              {
+                path: "src/app.ts",
+                kind: { type: "update", move_path: null },
+                diff: "@@\n-old\n+new\n",
+              },
+            ],
+          },
+        },
+      },
+    ];
+
+    expect(projectTimelineEvents(events)).toEqual([
+      {
+        id: "file:patch-1",
+        kind: "file_change",
+        files: ["src/app.ts"],
+        summary: "Edited src/app.ts",
+        diffs: ["@@\n-old\n+new"],
+        status: "completed",
+      },
+    ]);
+  });
+
+  it("updates a file change lifecycle item instead of rendering started and completed separately", () => {
+    const events: SessionEvent[] = [
+      {
+        id: 1,
+        eventType: "tool.call.started",
+        payload: {
+          item: {
+            id: "patch-1",
+            type: "fileChange",
+            status: "inProgress",
+            changes: [{ path: "src/app.ts", kind: { type: "update", move_path: null }, diff: "" }],
+          },
+        },
+      },
+      {
+        id: 2,
+        eventType: "tool.call.completed",
+        payload: {
+          item: {
+            id: "patch-1",
+            type: "fileChange",
+            status: "completed",
+            changes: [
+              {
+                path: "src/app.ts",
+                kind: { type: "update", move_path: null },
+                diff: "@@\n-old\n+new\n",
+              },
+            ],
+          },
+        },
+      },
+    ];
+
+    expect(projectTimelineEvents(events)).toEqual([
+      {
+        id: "file:patch-1",
+        kind: "file_change",
+        files: ["src/app.ts"],
+        summary: "Edited src/app.ts",
+        diffs: ["@@\n-old\n+new"],
+        status: "completed",
+      },
+    ]);
+  });
+
+  it("summarizes reported file changes without acceptance wording", () => {
+    const events: SessionEvent[] = [
+      {
+        id: 1,
+        eventType: "file.change.reported",
+        payload: { files: ["src/app.ts", "src/theme.css", "README.md"] },
+      },
+    ];
+
+    expect(projectTimelineEvents(events)).toEqual([
+      {
+        id: "file:1",
+        kind: "file_change",
+        files: ["src/app.ts", "src/theme.css", "README.md"],
+        summary: "Edited 3 files",
+      },
+    ]);
+  });
+
   it("collapses status churn into one status summary item", () => {
     const events: SessionEvent[] = [
       { id: 1, eventType: "session.status.changed", payload: { status: "running" } },
@@ -82,7 +322,7 @@ describe("projectTimelineEvents", () => {
     ];
 
     expect(projectTimelineEvents(events)).toEqual([
-      { id: "user:1", kind: "user", text: "hello" },
+      { id: "user:1", kind: "user", text: "hello", imagePaths: [] },
       {
         id: "activity:2",
         kind: "activity",
@@ -111,6 +351,28 @@ describe("projectTimelineEvents", () => {
         groups: [{ label: "commandExecution", status: "completed", count: 1 }],
       },
       { id: "status:3", kind: "status_summary", statuses: ["idle"] },
+    ]);
+  });
+
+  it("preserves user image attachments on timeline items", () => {
+    const events: SessionEvent[] = [
+      {
+        id: 1,
+        eventType: "user.message",
+        payload: {
+          text: "look at this",
+          imagePaths: ["/tmp/attachments/sess-1/screenshot.png"],
+        },
+      },
+    ];
+
+    expect(projectTimelineEvents(events)).toEqual([
+      {
+        id: "user:1",
+        kind: "user",
+        text: "look at this",
+        imagePaths: ["/tmp/attachments/sess-1/screenshot.png"],
+      },
     ]);
   });
 });

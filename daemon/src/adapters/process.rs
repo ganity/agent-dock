@@ -19,6 +19,7 @@ pub fn claude_turn_launch(message: &str, resume_session_id: Option<&str>) -> Lau
         "--verbose".into(),
         "--output-format".into(),
         "stream-json".into(),
+        "--include-partial-messages".into(),
     ];
 
     if let Some(session_id) = resume_session_id {

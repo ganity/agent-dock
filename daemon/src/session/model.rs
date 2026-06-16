@@ -1,10 +1,12 @@
 #[derive(Clone, Debug, PartialEq)]
 pub struct SessionRecord {
     pub id: String,
+    pub owner_user_id: String,
     pub root_id: String,
     pub workspace_path: String,
     pub source_kind: String,
     pub agent_kind: String,
+    pub title: Option<String>,
     pub runtime_session_id: Option<String>,
     pub status: String,
 }
@@ -19,9 +21,11 @@ pub struct StoredEvent {
 #[derive(Clone, Debug, PartialEq)]
 pub struct SessionSummary {
     pub id: String,
+    pub owner_user_id: String,
     pub workspace_path: String,
     pub source_kind: String,
     pub agent_kind: String,
+    pub title: Option<String>,
     pub runtime_session_id: Option<String>,
     pub status: String,
 }
@@ -30,4 +34,5 @@ pub struct SessionSummary {
 pub struct SessionSnapshot {
     pub session: SessionRecord,
     pub events: Vec<StoredEvent>,
+    pub has_more_history: bool,
 }

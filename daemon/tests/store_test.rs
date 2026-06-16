@@ -1,14 +1,16 @@
-use agent_workspace_daemon::session::store::SqliteSessionStore;
+use agent_dock_daemon::session::store::SqliteSessionStore;
 
 #[tokio::test]
 async fn store_builds_session_snapshot_in_event_order() {
     let store = SqliteSessionStore::in_memory().await.unwrap();
     let session_id = store
         .create_session(
+            "usr_workspace".into(),
             "workspace".into(),
             "repo".into(),
             "managed".into(),
             "placeholder".into(),
+            None,
         )
         .await
         .unwrap();
