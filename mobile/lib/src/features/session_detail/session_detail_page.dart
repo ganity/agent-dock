@@ -605,6 +605,10 @@ class _SessionDetailPageState extends State<SessionDetailPage>
     if (_streamError != null && _streamError != _streamForbiddenText) {
       return 'reconnecting';
     }
+    final currentStatus = _normalizedStatus(_sessionSummary?.status);
+    if (_shouldPreferCurrentSessionStatus(currentStatus)) {
+      return currentStatus;
+    }
     final events = _events;
     return events == null
         ? widget.session?.status
@@ -1296,7 +1300,7 @@ class _SessionDetailPageState extends State<SessionDetailPage>
             setState(() {
               final reconnectingError = _streamError;
               final events = _events ?? <SessionEvent>[];
-              if (!events.any((item) => item.id == event.id)) {
+            if (!events.any((item) => item.id == event.id)) {
                 final insertionIndex = events.indexWhere(
                   (item) => item.id > event.id,
                 );
@@ -1308,6 +1312,21 @@ class _SessionDetailPageState extends State<SessionDetailPage>
                     event,
                     ...events.skip(insertionIndex),
                   ];
+                }
+                if (event.eventType == 'session.status.changed') {
+                  final nextStatus = _sessionStatusFromPayload(event.payload);
+                  final summary = _resolvedSessionSummary;
+                  if (nextStatus != null && summary != null) {
+                    _resolvedSessionSummary = SessionSummary(
+                      id: summary.id,
+                      title: summary.title,
+                      agentKind: summary.agentKind,
+                      sourceKind: summary.sourceKind,
+                      runtimeSessionId: summary.runtimeSessionId,
+                      status: nextStatus,
+                      workspacePath: summary.workspacePath,
+                    );
+                  }
                 }
                 _syncAutoExpandedFailedToolWithCurrentEvents();
                 if (!_isNearBottom) {
@@ -2182,7 +2201,9 @@ class _SessionStatusPillState extends State<_SessionStatusPill> {
   Widget build(BuildContext context) {
     _syncPulseTimer();
     final dotColor = _sessionStatusDotColor(widget.label);
+    final maxWidth = math.min(MediaQuery.sizeOf(context).width * 0.38, 220.0);
     return Container(
+      constraints: BoxConstraints(maxWidth: maxWidth),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       decoration: BoxDecoration(
         color: const Color(0xFF17232D),
@@ -2207,7 +2228,13 @@ class _SessionStatusPillState extends State<_SessionStatusPill> {
             ),
           ),
           const SizedBox(width: 8),
-          Text(widget.label),
+          Flexible(
+            child: Text(
+              widget.label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
         ],
       ),
     );
@@ -2587,12 +2614,28 @@ String? _latestMeaningfulSessionStatus(
 }
 
 String? _sessionStatusFromPayload(Map<String, Object?> payload) {
+  if (_turnErrorMessage(payload) case final message?) {
+    return message;
+  }
   return switch (payload['status']) {
     final String value => _normalizedStatus(value),
     final Map<String, Object?> value when value['type'] is String =>
       _normalizedStatus(value['type'] as String),
     _ => null,
   };
+}
+
+String? _turnErrorMessage(Map<String, Object?> payload) {
+  final turn = payload['turn'];
+  if (turn is! Map<String, Object?>) {
+    return null;
+  }
+  final error = turn['error'];
+  if (error is! Map<String, Object?>) {
+    return null;
+  }
+  final message = error['message'] as String?;
+  return _normalizedStatus(message);
 }
 
 String? _normalizedStatus(String? value) {
@@ -2606,6 +2649,13 @@ String? _normalizedStatus(String? value) {
 bool _sessionAllowsActiveIndicators(String? status) {
   return switch (status?.trim()) {
     'running' || 'active' => true,
+    _ => false,
+  };
+}
+
+bool _shouldPreferCurrentSessionStatus(String? status) {
+  return switch (status?.trim()) {
+    'running' || 'active' || 'idle' || 'suspended' => true,
     _ => false,
   };
 }
@@ -2781,6 +2831,7 @@ class _TimelineItemCard extends StatelessWidget {
         explicitChildNodes: true,
         label: _sessionStatusLabel(status),
         child: Container(
+          width: double.infinity,
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
           decoration: BoxDecoration(
             color: const Color(0x1417232D),
@@ -2788,11 +2839,10 @@ class _TimelineItemCard extends StatelessWidget {
             border: Border.all(color: const Color(0x3329404D)),
           ),
           child: Row(
-            mainAxisSize: MainAxisSize.min,
             children: [
               const Icon(Icons.info_outline, size: 18),
               const SizedBox(width: 8),
-              Text(_sessionStatusLabel(status)),
+              Expanded(child: Text(_sessionStatusLabel(status))),
             ],
           ),
         ),
@@ -4293,7 +4343,18 @@ Uri? _sessionAttachmentUri(Uri? daemonUrl, String sessionId, String imagePath) {
 }
 
 String _sessionStatusLabel(String status) {
-  return 'Session $status';
+  return switch (status.trim()) {
+    'running' ||
+    'active' ||
+    'idle' ||
+    'completed' ||
+    'failed' ||
+    'cancelled' ||
+    'created' ||
+    'reconnecting' ||
+    'offline' => 'Session $status',
+    _ => status,
+  };
 }
 
 String _toolSemanticLabel(String label, String? status) {
@@ -4790,9 +4851,14 @@ Color _statusPillColor(_StatusPillTone tone) {
 }
 
 Color _sessionStatusDotColor(String status) {
-  return switch (status) {
+  final normalized = status.trim();
+  return switch (normalized) {
     'running' || 'active' => const Color(0xFF43D17A),
-    'reconnecting' || 'offline' => const Color(0xFFF0B84A),
+    'reconnecting' ||
+    'offline' ||
+    'failed' ||
+    'systemError' => const Color(0xFFF0B84A),
+    _ when normalized.contains(' ') => const Color(0xFFF0B84A),
     _ => const Color(0xFF9FB3C8),
   };
 }

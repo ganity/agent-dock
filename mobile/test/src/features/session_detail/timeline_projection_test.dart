@@ -69,6 +69,39 @@ void main() {
     expect((items[2] as StatusSummaryItem).status, 'idle');
   });
 
+  test('projects turn error messages instead of opaque system error statuses', () {
+    final items = projectTimelineItems([
+      const SessionEvent(
+        id: 1,
+        eventType: 'session.status.changed',
+        payload: {
+          'status': {'type': 'systemError'},
+        },
+      ),
+      const SessionEvent(
+        id: 2,
+        eventType: 'session.status.changed',
+        payload: {
+          'turn': {
+            'status': 'failed',
+            'error': {
+              'message':
+                  'Selected model is at capacity. Please try a different model.',
+              'codexErrorInfo': 'serverOverloaded',
+            },
+          },
+        },
+      ),
+    ]);
+
+    expect(items, hasLength(1));
+    expect(items.single, isA<StatusSummaryItem>());
+    expect(
+      (items.single as StatusSummaryItem).status,
+      'Selected model is at capacity. Please try a different model.',
+    );
+  });
+
   test('keeps image-only user messages in the projected timeline', () {
     final items = projectTimelineItems([
       const SessionEvent(

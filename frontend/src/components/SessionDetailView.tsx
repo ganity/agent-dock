@@ -32,8 +32,7 @@ export function SessionDetailView(props: {
 
   const items = projectTimelineEvents(props.session.events ?? []);
   const displayTitle = getSessionTitle(props.session);
-  const latestStatus =
-    findLatestNonEmptyStatus(items) ?? normalizeStatus(props.session.status) ?? props.session.status;
+  const latestStatus = resolveDisplayedStatus(props.session.status, items);
 
   useLayoutEffect(() => {
     const transcript = transcriptRef.current;
@@ -204,6 +203,25 @@ export function SessionDetailView(props: {
 function normalizeStatus(status?: string): string | undefined {
   const value = status?.trim();
   return value ? value : undefined;
+}
+
+function shouldPreferSessionStatus(status?: string): boolean {
+  return matchesCurrentStatusKind(normalizeStatus(status));
+}
+
+function matchesCurrentStatusKind(status?: string): boolean {
+  return status === "running" || status === "active" || status === "idle" || status === "suspended";
+}
+
+function resolveDisplayedStatus(
+  sessionStatus: string | undefined,
+  items: ReturnType<typeof projectTimelineEvents>,
+): string | undefined {
+  const normalizedSessionStatus = normalizeStatus(sessionStatus);
+  if (shouldPreferSessionStatus(normalizedSessionStatus)) {
+    return normalizedSessionStatus;
+  }
+  return findLatestNonEmptyStatus(items) ?? normalizedSessionStatus ?? sessionStatus;
 }
 
 function findLatestNonEmptyStatus(items: ReturnType<typeof projectTimelineEvents>): string | undefined {

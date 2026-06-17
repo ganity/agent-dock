@@ -141,7 +141,7 @@ export function projectTimelineEvents(events: SessionEvent[]): TimelineItem[] {
         flushPending();
         pending = { kind: "status", firstEventId: event.id, statuses: [] };
       }
-      pending.statuses.push(readStatus(event.payload.status));
+      pending.statuses.push(readStatusFromPayload(event.payload));
       continue;
     }
 
@@ -407,6 +407,17 @@ function isInternalAssistantText(text: string): boolean {
 
 function readString(value: unknown): string | null {
   return typeof value === "string" ? value : null;
+}
+
+function readStatusFromPayload(payload: Record<string, unknown>): string {
+  const turn = asObject(payload.turn);
+  const error = asObject(turn.error);
+  const errorMessage = readString(error.message)?.trim();
+  if (errorMessage) {
+    return errorMessage;
+  }
+
+  return readStatus(payload.status);
 }
 
 function trimEnd(value: string | null): string | undefined {

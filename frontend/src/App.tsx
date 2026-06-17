@@ -92,8 +92,13 @@ export default function App() {
       setSelectedSession((current) => {
         if (!current || current.id !== selectedSession.id) return current;
         if (current.events.some((item) => item.id === nextEvent.id)) return current;
+        const nextStatus =
+          nextEvent.eventType === "session.status.changed"
+            ? readSessionStatus(nextEvent.payload) ?? current.status
+            : current.status;
         return {
           ...current,
+          status: nextStatus,
           events: [...current.events, nextEvent],
         };
       });
@@ -304,4 +309,21 @@ export default function App() {
       )}
     </main>
   );
+}
+
+function readSessionStatus(payload: Record<string, unknown>): string | undefined {
+  const rawStatus = payload.status;
+  if (typeof rawStatus === "string") {
+    const value = rawStatus.trim();
+    return value ? value : undefined;
+  }
+  if (
+    typeof rawStatus === "object" &&
+    rawStatus !== null &&
+    typeof (rawStatus as { type?: unknown }).type === "string"
+  ) {
+    const value = ((rawStatus as { type: string }).type).trim();
+    return value ? value : undefined;
+  }
+  return undefined;
 }

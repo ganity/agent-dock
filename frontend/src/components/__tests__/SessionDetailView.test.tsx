@@ -336,6 +336,78 @@ describe("SessionDetailView", () => {
     expect(screen.queryByText("created")).not.toBeInTheDocument();
   });
 
+  it("shows the latest turn error message in the status pill when the current session status is not more specific", () => {
+    render(
+      <SessionDetailView
+        session={{
+          id: "sess-turn-error",
+          agentKind: "codex",
+          status: "failed",
+          events: [
+            { id: 1, eventType: "session.status.changed", payload: { status: { type: "systemError" } } },
+            {
+              id: 2,
+              eventType: "session.status.changed",
+              payload: {
+                turn: {
+                  status: "failed",
+                  error: {
+                    message: "Selected model is at capacity. Please try a different model.",
+                    codexErrorInfo: "serverOverloaded",
+                  },
+                },
+              },
+            },
+          ],
+        }}
+        onBack={() => {}}
+        onSend={() => {}}
+        onUploadImage={async () => ""}
+        onConnectVoiceInput={() => ({ close() {} } as WebSocket)}
+        onLoadOlder={async () => {}}
+        loadingHistory={false}
+      />,
+    );
+
+    expect(document.querySelector(".session-status-pill")).toHaveTextContent(
+      "Selected model is at capacity. Please try a different model.",
+    );
+  });
+
+  it("prefers the current session status over older timeline error text", () => {
+    render(
+      <SessionDetailView
+        session={{
+          id: "sess-recovered",
+          agentKind: "codex",
+          status: "idle",
+          events: [
+            {
+              id: 1,
+              eventType: "session.status.changed",
+              payload: {
+                turn: {
+                  status: "failed",
+                  error: {
+                    message: "Selected model is at capacity. Please try a different model.",
+                  },
+                },
+              },
+            },
+          ],
+        }}
+        onBack={() => {}}
+        onSend={() => {}}
+        onUploadImage={async () => ""}
+        onConnectVoiceInput={() => ({ close() {} } as WebSocket)}
+        onLoadOlder={async () => {}}
+        loadingHistory={false}
+      />,
+    );
+
+    expect(document.querySelector(".session-status-pill")).toHaveTextContent("idle");
+  });
+
   it("shows slash-command suggestions and inserts the selected command into the composer", () => {
     const onSend = vi.fn();
 

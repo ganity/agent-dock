@@ -2980,6 +2980,165 @@ void main() {
   );
 
   testWidgets(
+    'shows the latest turn error message in the top bar pill when the current session status is not more specific',
+    (tester) async {
+      await pumpApp(
+        tester,
+        api: FakeDaemonApi(
+          bootstrap: MobileBootstrap(
+            daemonVersion: '0.1.0',
+            user: const CurrentUser(
+              id: 'usr_workspace',
+              displayName: 'Workspace',
+            ),
+            roots: const <WorkspaceRoot>[],
+            sessions: const [
+              SessionSummary(
+                id: 'sess_1',
+                title: 'Turn error status',
+                agentKind: 'codex',
+                sourceKind: 'managed',
+                runtimeSessionId: 'runtime_1',
+                status: 'failed',
+                workspacePath: '/home/jhz/projects/agent-dock',
+              ),
+            ],
+            voice: const VoiceConfig(doubaoDirectAvailable: false),
+          ),
+          snapshot: const SessionSnapshot(
+            id: 'sess_1',
+            title: 'Turn error status',
+            agentKind: 'codex',
+            sourceKind: 'managed',
+            runtimeSessionId: 'runtime_1',
+            workspacePath: '/home/jhz/projects/agent-dock',
+            status: 'failed',
+            hasMoreHistory: false,
+            events: [
+              SessionEvent(
+                id: 1,
+                eventType: 'session.status.changed',
+                payload: {
+                  'status': {'type': 'systemError'},
+                },
+              ),
+              SessionEvent(
+                id: 2,
+                eventType: 'session.status.changed',
+                payload: {
+                  'turn': {
+                    'status': 'failed',
+                    'error': {
+                      'message':
+                          'Selected model is at capacity. Please try a different model.',
+                      'codexErrorInfo': 'serverOverloaded',
+                    },
+                  },
+                },
+              ),
+            ],
+          ),
+        ),
+      );
+
+      await tester.enterText(find.byType(TextField).at(0), 'workspace');
+      await tester.enterText(find.byType(TextField).at(1), '1234');
+      await tester.tap(find.text('Sign in'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Turn error status'));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const ValueKey('session-status-pill')), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('session-status-pill')),
+          matching: find.text(
+            'Selected model is at capacity. Please try a different model.',
+          ),
+        ),
+        findsOneWidget,
+      );
+      final errorDot = tester.widget<Container>(
+        find.byKey(const ValueKey('session-status-pill-dot')),
+      );
+      final errorDotDecoration = errorDot.decoration! as BoxDecoration;
+      expect(errorDotDecoration.color, const Color(0xFFF0B84A));
+    },
+  );
+
+  testWidgets(
+    'prefers the current session status over older timeline error text in the top bar pill',
+    (tester) async {
+      await pumpApp(
+        tester,
+        api: FakeDaemonApi(
+          bootstrap: MobileBootstrap(
+            daemonVersion: '0.1.0',
+            user: const CurrentUser(
+              id: 'usr_workspace',
+              displayName: 'Workspace',
+            ),
+            roots: const <WorkspaceRoot>[],
+            sessions: const [
+              SessionSummary(
+                id: 'sess_1',
+                title: 'Recovered session',
+                agentKind: 'codex',
+                sourceKind: 'managed',
+                runtimeSessionId: 'runtime_1',
+                status: 'idle',
+                workspacePath: '/home/jhz/projects/agent-dock',
+              ),
+            ],
+            voice: const VoiceConfig(doubaoDirectAvailable: false),
+          ),
+          snapshot: const SessionSnapshot(
+            id: 'sess_1',
+            title: 'Recovered session',
+            agentKind: 'codex',
+            sourceKind: 'managed',
+            runtimeSessionId: 'runtime_1',
+            workspacePath: '/home/jhz/projects/agent-dock',
+            status: 'idle',
+            hasMoreHistory: false,
+            events: [
+              SessionEvent(
+                id: 1,
+                eventType: 'session.status.changed',
+                payload: {
+                  'turn': {
+                    'status': 'failed',
+                    'error': {
+                      'message':
+                          'Selected model is at capacity. Please try a different model.',
+                    },
+                  },
+                },
+              ),
+            ],
+          ),
+        ),
+      );
+
+      await tester.enterText(find.byType(TextField).at(0), 'workspace');
+      await tester.enterText(find.byType(TextField).at(1), '1234');
+      await tester.tap(find.text('Sign in'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Recovered session'));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const ValueKey('session-status-pill')), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('session-status-pill')),
+          matching: find.text('idle'),
+        ),
+        findsOneWidget,
+      );
+    },
+  );
+
+  testWidgets(
     'shows an assistant typing indicator when assistant text is latest in a running session',
     (tester) async {
       await pumpApp(

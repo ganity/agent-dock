@@ -356,6 +356,45 @@ describe("App", () => {
     });
   });
 
+  it("updates the selected session status from live session status events", async () => {
+    vi.mocked(listSessions).mockResolvedValueOnce([
+      {
+        id: "sess-1",
+        title: "Launch Pad",
+        agentKind: "codex",
+        sourceKind: "managed",
+        workspacePath: "apps/api",
+        status: "running",
+      },
+    ]);
+
+    render(<App />);
+
+    fireEvent.change(await screen.findByLabelText("Username"), { target: { value: "admin" } });
+    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "1234" } });
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+    await waitFor(() => {
+      expect(listSessions).toHaveBeenCalledTimes(1);
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Open Launch Pad" }));
+    expect(await screen.findByRole("button", { name: "Session details" })).toBeInTheDocument();
+    expect(document.querySelector(".session-status-pill")).toHaveTextContent("running");
+
+    liveSocket.onmessage?.({
+      data: JSON.stringify({
+        id: 103,
+        eventType: "session.status.changed",
+        payload: { status: "idle" },
+      }),
+    });
+
+    await waitFor(() => {
+      expect(document.querySelector(".session-status-pill")).toHaveTextContent("idle");
+    });
+  });
+
   it("resumes a suspended session before opening details", async () => {
     vi.mocked(listSessions).mockResolvedValueOnce([
       {

@@ -310,6 +310,40 @@ describe("projectTimelineEvents", () => {
     ]);
   });
 
+  it("projects Codex turn error messages instead of opaque system error statuses", () => {
+    const events: SessionEvent[] = [
+      {
+        id: 1,
+        eventType: "session.status.changed",
+        payload: { status: { type: "systemError" } },
+      },
+      {
+        id: 2,
+        eventType: "session.status.changed",
+        payload: {
+          turn: {
+            status: "failed",
+            error: {
+              message: "Selected model is at capacity. Please try a different model.",
+              codexErrorInfo: "serverOverloaded",
+            },
+          },
+        },
+      },
+    ];
+
+    expect(projectTimelineEvents(events)).toEqual([
+      {
+        id: "status:1",
+        kind: "status_summary",
+        statuses: [
+          "systemError",
+          "Selected model is at capacity. Please try a different model.",
+        ],
+      },
+    ]);
+  });
+
   it("flushes activity summaries before later assistant messages", () => {
     const events: SessionEvent[] = [
       { id: 1, eventType: "user.message", payload: { text: "hello" } },

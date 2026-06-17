@@ -279,6 +279,9 @@ List<String> _imagePaths(Map<String, Object?> payload) {
 }
 
 String? _usefulStatus(Map<String, Object?> payload) {
+  if (_turnErrorMessage(payload) case final message?) {
+    return message;
+  }
   final raw = payload['status'];
   final status = switch (raw) {
     final String value => value,
@@ -298,6 +301,17 @@ String? _usefulStatus(Map<String, Object?> payload) {
     'cancelled' => status,
     _ => null,
   };
+}
+
+String? _turnErrorMessage(Map<String, Object?> payload) {
+  final turn = _asObject(payload['turn']);
+  final error = _asObject(turn['error']);
+  final message = error['message'] as String?;
+  if (message == null) {
+    return null;
+  }
+  final trimmed = message.trim();
+  return trimmed.isEmpty ? null : trimmed;
 }
 
 bool _hasUsefulPayload(Map<String, Object?> payload) {
