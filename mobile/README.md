@@ -2,6 +2,10 @@
 
 A new Flutter project.
 
+## iOS 构建与签名
+
+macOS 环境恢复、证书导入、IPA 编译导出、真机安装验证流程见 [IOS_BUILD_SIGNING.md](IOS_BUILD_SIGNING.md)。
+
 ## Getting Started
 
 This project is a starting point for a Flutter application.

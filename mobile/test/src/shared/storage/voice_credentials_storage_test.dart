@@ -5,6 +5,28 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   group('VoiceCredentialsStorage', () {
+    test('treats placeholder Doubao credentials as invalid', () {
+      const credentials = DoubaoVoiceCredentials(
+        appId: 'your-app-id',
+        accessToken: 'your-access-token',
+        resourceId: 'volc.bigasr.sauc.duration',
+        websocketUrl: 'wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async',
+      );
+
+      expect(credentials.isUsable, isFalse);
+    });
+
+    test('treats real Doubao credentials as usable', () {
+      const credentials = DoubaoVoiceCredentials(
+        appId: 'test-app-id',
+        accessToken: 'test-access-token',
+        resourceId: 'volc.test.resource',
+        websocketUrl: 'wss://example.com/test-voice',
+      );
+
+      expect(credentials.isUsable, isTrue);
+    });
+
     test(
       'saves and reads Doubao credentials scoped by daemon and user',
       () async {

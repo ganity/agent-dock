@@ -107,7 +107,7 @@ class _SessionsPageState extends State<SessionsPage>
       !_isDaemonVersionSupported(_bootstrap.daemonVersion);
 
   bool get _isVoiceConfigured =>
-      _bootstrap.voice.doubaoDirectAvailable ||
+      (_bootstrap.voice.providerCredentials?.isUsable ?? false) ||
       _effectiveVoiceInputController.isConfigured;
 
   @override
@@ -478,7 +478,8 @@ class _SessionsPageState extends State<SessionsPage>
               daemonUrl: widget.daemonUrl,
               userId: _bootstrap.user.id,
             ),
-            daemonManagedVoiceAvailable: _bootstrap.voice.doubaoDirectAvailable,
+            daemonManagedVoiceAvailable:
+                _bootstrap.voice.providerCredentials?.isUsable ?? false,
             onTestConnection: _testConnection,
           ),
         ),

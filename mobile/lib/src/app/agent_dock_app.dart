@@ -223,6 +223,17 @@ class _AgentDockShellState extends State<_AgentDockShell> {
     }
   }
 
+  void _prepareVoiceInputController(VoiceInputController controller) {
+    if (!controller.isConfigured) {
+      return;
+    }
+    unawaited(
+      controller.prepare().catchError((Object _) {
+        // Voice preparation is opportunistic; real errors are surfaced on use.
+      }),
+    );
+  }
+
   Future<void> _restoreProfile() async {
     final savedDaemonUrl = await widget.authStorage.readDaemonUrl();
     _daemonUrl = savedDaemonUrl ?? _daemonUrl;
@@ -295,6 +306,7 @@ class _AgentDockShellState extends State<_AgentDockShell> {
         _isRestoring = false;
         _restoreFailed = false;
       });
+      _prepareVoiceInputController(_voiceInputController);
       unawaited(
         _refreshVoiceInputController(
           daemonUrl: profile.daemonUrl,
@@ -592,7 +604,7 @@ class _AgentDockShellState extends State<_AgentDockShell> {
 
     if (voice?.doubaoDirectAvailable == true) {
       final providerCredentials = voice?.providerCredentials;
-      if (providerCredentials != null) {
+      if (providerCredentials != null && providerCredentials.isUsable) {
         return DoubaoVoiceInputController(
           credentials: providerCredentials,
           transport: IoDoubaoVoiceTransport(
@@ -619,7 +631,7 @@ class _AgentDockShellState extends State<_AgentDockShell> {
         );
       }
     } on Object {
-      if (voice?.doubaoDirectAvailable != true) {
+      if (voice?.providerCredentials?.isUsable != true) {
         return const DisabledVoiceInputController();
       }
     }
@@ -632,7 +644,7 @@ class _AgentDockShellState extends State<_AgentDockShell> {
       return widget.voiceInputController;
     }
     final providerCredentials = voice?.providerCredentials;
-    if (providerCredentials == null) {
+    if (providerCredentials == null || !providerCredentials.isUsable) {
       return const DisabledVoiceInputController();
     }
     return DoubaoVoiceInputController(
@@ -678,6 +690,7 @@ class _AgentDockShellState extends State<_AgentDockShell> {
     setState(() {
       _voiceInputController = controller;
     });
+    _prepareVoiceInputController(controller);
   }
 
   Future<void> _refreshVoiceSettingsState() async {

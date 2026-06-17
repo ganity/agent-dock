@@ -8,7 +8,7 @@ void main() {
       daemonUrl: Uri.parse(
         const String.fromEnvironment(
           'AGENT_DOCK_DAEMON_URL',
-          defaultValue: 'http://10.0.2.2:4123',
+          defaultValue: 'https://dockapi.lark.video/',
         ),
       ),
     ),

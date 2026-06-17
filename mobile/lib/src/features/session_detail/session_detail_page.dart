@@ -64,7 +64,8 @@ class SessionDetailPage extends StatefulWidget {
   State<SessionDetailPage> createState() => _SessionDetailPageState();
 }
 
-class _SessionDetailPageState extends State<SessionDetailPage> {
+class _SessionDetailPageState extends State<SessionDetailPage>
+    with WidgetsBindingObserver {
   static const _slashCommands = <String>['/resume', '/model', '\$skills'];
   static const _bottomProximityThreshold = 120.0;
   static const _topHistoryLoadThreshold = 400.0;
@@ -291,6 +292,7 @@ class _SessionDetailPageState extends State<SessionDetailPage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     final draftScope = _draftScope;
     final composerDraftStore = widget.composerDraftStore;
     if (draftScope != null && composerDraftStore != null) {
@@ -368,6 +370,7 @@ class _SessionDetailPageState extends State<SessionDetailPage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     if (_isListeningForVoice) {
       unawaited(widget.voiceInputController?.cancel());
     }
@@ -387,6 +390,19 @@ class _SessionDetailPageState extends State<SessionDetailPage> {
     _messageController.removeListener(_handleDraftChanged);
     _messageController.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed || !_hasStartedEventStream) {
+      return;
+    }
+    _eventStreamRetryTimer?.cancel();
+    _eventStreamRetryTimer = null;
+    _connectEventStreamWithStateUpdate(
+      updateState: true,
+      preserveReconnectBanner: true,
+    );
   }
 
   void _syncComposerDraft() {
@@ -510,6 +526,27 @@ class _SessionDetailPageState extends State<SessionDetailPage> {
 
   String _attachmentPickerErrorText(Object error) {
     return 'Could not pick image';
+  }
+
+  String _requestFailureText(Object error, {required String fallback}) {
+    if (error is DaemonApiException) {
+      return error.message;
+    }
+    if (error is SocketException) {
+      return _streamOfflineText;
+    }
+    return fallback;
+  }
+
+  void _logRequestFailure(String action, Object error) {
+    if (error is DaemonApiException) {
+      debugPrint(
+        'Agent Dock $action failed: '
+        'status=${error.statusCode} code=${error.code} message=${error.message}',
+      );
+      return;
+    }
+    debugPrint('Agent Dock $action failed: $error');
   }
 
   bool get _isNearBottom {
@@ -755,6 +792,7 @@ class _SessionDetailPageState extends State<SessionDetailPage> {
       if (await _handleUnauthorizedRequest(error)) {
         return;
       }
+      _logRequestFailure('uploadAttachment', error);
       if (!mounted) {
         return;
       }
@@ -767,6 +805,10 @@ class _SessionDetailPageState extends State<SessionDetailPage> {
       setState(() {
         _attachments[refreshedIndex] = _attachments[refreshedIndex].copyWith(
           status: _AttachmentUploadState.failed,
+        );
+        _attachmentError = _requestFailureText(
+          error,
+          fallback: 'Upload failed. Retry.',
         );
         _isUploading = false;
       });
@@ -880,6 +922,7 @@ class _SessionDetailPageState extends State<SessionDetailPage> {
             return;
           }
           setState(() {
+            _composerClearFadeCount = 0;
             _messageController.clear();
           });
         });
@@ -897,11 +940,15 @@ class _SessionDetailPageState extends State<SessionDetailPage> {
       if (await _handleUnauthorizedRequest(error)) {
         return;
       }
+      _logRequestFailure('sendMessage', error);
       if (!mounted) {
         return;
       }
       setState(() {
-        _sendFailureText = 'Send failed. Retry';
+        _sendFailureText = _requestFailureText(
+          error,
+          fallback: 'Send failed. Retry.',
+        );
         _sendFailureShakeCount += 1;
       });
       unawaited(_emitWarningHaptic());
@@ -5462,56 +5509,74 @@ class _ComposerPreview extends StatelessWidget {
                   ),
                 ),
               ),
-            Row(
-              children: [
-                IconButton(
-                  tooltip: 'Attach image',
-                  onPressed: enabled && !isUploading ? onAttachImage : null,
-                  icon: const Icon(Icons.add_photo_alternate_outlined),
-                ),
-                Expanded(
-                  child: _ComposerInputField(
-                    controller: controller,
-                    enabled: enabled && !isUploading,
-                    composerClearFadeCount: composerClearFadeCount,
-                    disableAnimations: disableAnimations,
-                    onSubmitted: onSend,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                IconButton(
-                  tooltip: voiceAvailable
-                      ? 'Voice input'
-                      : 'Voice input unavailable',
-                  onPressed: enabled && !isUploading && voiceAvailable
-                      ? onVoiceInput
-                      : null,
-                  icon: voiceIcon,
-                ),
-                if (controller case final draftController?)
-                  ValueListenableBuilder<TextEditingValue>(
-                    valueListenable: draftController,
-                    builder: (context, value, _) {
-                      final hasSendableContent =
-                          value.text.trim().isNotEmpty || hasUploadedAttachment;
-                      return IconButton(
-                        tooltip: 'Send',
-                        onPressed: canSubmit && hasSendableContent
-                            ? onSend
-                            : null,
-                        icon: sendIcon,
-                      );
-                    },
-                  )
-                else
+            Container(
+              key: const ValueKey('composer-input-surface'),
+              decoration: BoxDecoration(
+                color: const Color(0xFF17232D),
+                borderRadius: BorderRadius.circular(24),
+              ),
+              padding: const EdgeInsets.fromLTRB(6, 6, 8, 6),
+              child: Row(
+                children: [
                   IconButton(
-                    tooltip: 'Send',
-                    onPressed: canSubmit && hasUploadedAttachment
-                        ? onSend
-                        : null,
-                    icon: sendIcon,
+                    tooltip: 'Attach image',
+                    onPressed: enabled && !isUploading ? onAttachImage : null,
+                    visualDensity: VisualDensity.compact,
+                    padding: const EdgeInsets.all(10),
+                    icon: const Icon(Icons.add_photo_alternate_outlined),
                   ),
-              ],
+                  const SizedBox(width: 2),
+                  Expanded(
+                    child: _ComposerInputField(
+                      controller: controller,
+                      enabled: enabled && !isUploading,
+                      composerClearFadeCount: composerClearFadeCount,
+                      disableAnimations: disableAnimations,
+                      onSubmitted: onSend,
+                    ),
+                  ),
+                  const SizedBox(width: 2),
+                  IconButton(
+                    tooltip: voiceAvailable
+                        ? 'Voice input'
+                        : 'Voice input unavailable',
+                    onPressed: enabled && !isUploading && voiceAvailable
+                        ? onVoiceInput
+                        : null,
+                    visualDensity: VisualDensity.compact,
+                    padding: const EdgeInsets.all(10),
+                    icon: voiceIcon,
+                  ),
+                  if (controller case final draftController?)
+                    ValueListenableBuilder<TextEditingValue>(
+                      valueListenable: draftController,
+                      builder: (context, value, _) {
+                        final hasSendableContent =
+                            value.text.trim().isNotEmpty ||
+                            hasUploadedAttachment;
+                        return IconButton(
+                          tooltip: 'Send',
+                          onPressed: canSubmit && hasSendableContent
+                              ? onSend
+                              : null,
+                          visualDensity: VisualDensity.compact,
+                          padding: const EdgeInsets.all(10),
+                          icon: sendIcon,
+                        );
+                      },
+                    )
+                  else
+                    IconButton(
+                      tooltip: 'Send',
+                      onPressed: canSubmit && hasUploadedAttachment
+                          ? onSend
+                          : null,
+                      visualDensity: VisualDensity.compact,
+                      padding: const EdgeInsets.all(10),
+                      icon: sendIcon,
+                    ),
+                ],
+              ),
             ),
           ],
         ),
@@ -5682,6 +5747,16 @@ class _ComposerInputField extends StatelessWidget {
       enabled: enabled,
       decoration: InputDecoration(
         hintText: enabled ? 'Message the agent' : 'Connect daemon to send',
+        filled: false,
+        fillColor: Colors.transparent,
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 6,
+          vertical: 14,
+        ),
+        border: InputBorder.none,
+        enabledBorder: InputBorder.none,
+        focusedBorder: InputBorder.none,
+        disabledBorder: InputBorder.none,
       ),
       minLines: 1,
       maxLines: 5,

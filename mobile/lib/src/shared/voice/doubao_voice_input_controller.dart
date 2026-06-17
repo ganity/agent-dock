@@ -30,6 +30,8 @@ abstract class DoubaoVoiceTransport {
 }
 
 abstract class DoubaoAudioSource {
+  Future<void> prepare();
+
   Future<bool> requestPermission();
 
   Stream<Uint8List> startPcmStream();
@@ -104,6 +106,11 @@ class DoubaoVoiceInputController implements VoiceInputController {
 
   @override
   bool get isConfigured => true;
+
+  @override
+  Future<void> prepare() async {
+    await audioSource?.prepare();
+  }
 
   @override
   Future<String> listenForTranscript() async {
@@ -261,6 +268,11 @@ class RecordDoubaoAudioSource implements DoubaoAudioSource {
     : _recorder = recorder ?? AudioRecorderAdapter();
 
   final DoubaoRecorder _recorder;
+
+  @override
+  Future<void> prepare() async {
+    await _recorder.hasPermission(request: false);
+  }
 
   @override
   Future<bool> requestPermission() {

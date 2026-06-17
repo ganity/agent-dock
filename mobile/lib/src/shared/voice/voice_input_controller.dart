@@ -17,6 +17,8 @@ class VoiceInputUpdate {
 abstract class VoiceInputController {
   bool get isConfigured;
 
+  Future<void> prepare() async {}
+
   Future<String> listenForTranscript();
 
   Future<void> cancel() async {}
@@ -38,6 +40,9 @@ class DisabledVoiceInputController implements VoiceInputController {
 
   @override
   bool get isConfigured => false;
+
+  @override
+  Future<void> prepare() async {}
 
   @override
   Future<String> listenForTranscript() {

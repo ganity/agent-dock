@@ -6801,6 +6801,57 @@ void main() {
     expect(find.text('continue the Flutter work'), findsNothing);
   });
 
+  testWidgets('composer clear fade is removed after successful send settles', (
+    tester,
+  ) async {
+    final api = FakeDaemonApi(
+      bootstrap: MobileBootstrap(
+        daemonVersion: '0.1.0',
+        user: const CurrentUser(id: 'usr_workspace', displayName: 'Workspace'),
+        roots: const <WorkspaceRoot>[],
+        sessions: const [
+          SessionSummary(
+            id: 'sess_1',
+            title: 'Mobile migration',
+            agentKind: 'codex',
+            sourceKind: 'managed',
+            runtimeSessionId: 'runtime_1',
+            status: 'running',
+            workspacePath: '/home/jhz/projects/agent-dock',
+          ),
+        ],
+        voice: const VoiceConfig(doubaoDirectAvailable: false),
+      ),
+      snapshot: const SessionSnapshot(
+        id: 'sess_1',
+        title: 'Mobile migration',
+        agentKind: 'codex',
+        sourceKind: 'managed',
+        runtimeSessionId: 'runtime_1',
+        workspacePath: '/home/jhz/projects/agent-dock',
+        status: 'running',
+        hasMoreHistory: false,
+        events: <SessionEvent>[],
+      ),
+    );
+    await pumpApp(tester, api: api);
+
+    await tester.enterText(find.byType(TextField).at(0), 'workspace');
+    await tester.enterText(find.byType(TextField).at(1), '1234');
+    await tester.tap(find.text('Sign in'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Mobile migration'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Message the agent'),
+      'continue the Flutter work',
+    );
+    await tester.tap(find.byTooltip('Send'));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('composer-clear-fade')), findsNothing);
+  });
+
   testWidgets(
     'failed send preserves draft and attachments and allows keep editing',
     (tester) async {
@@ -6879,7 +6930,7 @@ void main() {
       );
       expect(composerField.controller?.text, 'continue the Flutter work');
       expect(find.text('screenshot.png'), findsOneWidget);
-      expect(find.text('Send failed. Retry'), findsOneWidget);
+      expect(find.text('Cannot send right now'), findsOneWidget);
       expect(find.byKey(const ValueKey('composer-retry-send')), findsOneWidget);
       expect(
         find.byKey(const ValueKey('composer-keep-editing')),
@@ -6901,7 +6952,7 @@ void main() {
       );
       expect(keptEditingField.controller?.text, 'continue the Flutter work');
       expect(find.text('screenshot.png'), findsOneWidget);
-      expect(find.text('Send failed. Retry'), findsNothing);
+      expect(find.text('Cannot send right now'), findsNothing);
     },
   );
 
@@ -7038,7 +7089,7 @@ void main() {
     await tester.tap(find.byTooltip('Send'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Send failed. Retry'), findsOneWidget);
+    expect(find.text('Cannot send right now'), findsOneWidget);
     expect(
       find.byKey(const ValueKey('composer-status-row-shake')),
       findsOneWidget,
@@ -8633,6 +8684,88 @@ void main() {
     ]);
   });
 
+  testWidgets('resuming the app reconnects the session event stream', (
+    tester,
+  ) async {
+    final resumedEvents = StreamController<SessionEvent>();
+    final api = FakeDaemonApi(
+      liveEventStreams: [
+        const Stream<SessionEvent>.empty(),
+        resumedEvents.stream,
+      ],
+      bootstrap: const MobileBootstrap(
+        daemonVersion: '0.1.0',
+        user: CurrentUser(id: 'usr_workspace', displayName: 'Workspace'),
+        roots: <WorkspaceRoot>[],
+        sessions: [
+          SessionSummary(
+            id: 'sess_1',
+            title: 'Mobile migration',
+            agentKind: 'codex',
+            sourceKind: 'managed',
+            runtimeSessionId: 'runtime_1',
+            status: 'running',
+            workspacePath: '/home/jhz/projects/agent-dock',
+          ),
+        ],
+        voice: VoiceConfig(doubaoDirectAvailable: false),
+      ),
+      snapshot: const SessionSnapshot(
+        id: 'sess_1',
+        title: 'Mobile migration',
+        agentKind: 'codex',
+        sourceKind: 'managed',
+        runtimeSessionId: 'runtime_1',
+        workspacePath: '/home/jhz/projects/agent-dock',
+        status: 'running',
+        hasMoreHistory: false,
+        events: [
+          SessionEvent(
+            id: 5,
+            eventType: 'user.message',
+            payload: {'text': 'initial prompt'},
+          ),
+        ],
+      ),
+    );
+    await pumpApp(tester, api: api);
+
+    await tester.enterText(find.byType(TextField).at(0), 'workspace');
+    await tester.enterText(find.byType(TextField).at(1), '1234');
+    await tester.tap(find.text('Sign in'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Mobile migration'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Connecting to event stream...'), findsOneWidget);
+
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pump();
+
+    resumedEvents.add(
+      const SessionEvent(
+        id: 6,
+        eventType: 'assistant.message',
+        payload: {'text': 'reply after resume'},
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(api.eventSubscriptions, [
+      'sess_1:tok_workspace:5',
+      'sess_1:tok_workspace:5',
+    ]);
+    expect(find.text('reply after resume'), findsOneWidget);
+    expect(find.text('Connecting to event stream...'), findsNothing);
+
+    await resumedEvents.close();
+  });
+
   testWidgets('reduced motion keeps the reconnecting banner static', (
     tester,
   ) async {
@@ -10078,6 +10211,41 @@ void main() {
       expect(find.text('Voice input configured'), findsOneWidget);
     },
   );
+
+  testWidgets('prepares configured voice input after sign in', (tester) async {
+    final voice = FakeVoiceInputController(transcript: 'continue by voice');
+    await pumpApp(
+      tester,
+      api: FakeDaemonApi(
+        bootstrap: const MobileBootstrap(
+          daemonVersion: '0.1.0',
+          user: CurrentUser(id: 'usr_workspace', displayName: 'Workspace'),
+          roots: <WorkspaceRoot>[],
+          sessions: [
+            SessionSummary(
+              id: 'sess_1',
+              title: 'Mobile migration',
+              agentKind: 'codex',
+              sourceKind: 'managed',
+              runtimeSessionId: 'runtime_1',
+              status: 'running',
+              workspacePath: '/home/jhz/projects/agent-dock',
+            ),
+          ],
+          voice: VoiceConfig(doubaoDirectAvailable: true),
+        ),
+      ),
+      voiceInputController: voice,
+    );
+
+    await tester.enterText(find.byType(TextField).at(0), 'workspace');
+    await tester.enterText(find.byType(TextField).at(1), '1234');
+    await tester.tap(find.text('Sign in'));
+    await tester.pumpAndSettle();
+
+    expect(voice.prepareCount, 1);
+    expect(voice.startCount, 0);
+  });
 
   testWidgets(
     'enables voice input when saved Doubao credentials exist for the signed-in user',
@@ -11869,6 +12037,152 @@ void main() {
   );
 
   testWidgets(
+    'placeholder provider voice settings allow local Doubao editing',
+    (tester) async {
+      final voiceStorage = MemoryVoiceCredentialsStorage();
+      await pumpApp(
+        tester,
+        api: FakeDaemonApi(
+          bootstrap: const MobileBootstrap(
+            daemonVersion: '0.1.0',
+            user: CurrentUser(id: 'usr_workspace', displayName: 'Workspace'),
+            roots: <WorkspaceRoot>[],
+            sessions: [
+              SessionSummary(
+                id: 'sess_1',
+                title: 'Mobile migration',
+                agentKind: 'codex',
+                sourceKind: 'managed',
+                runtimeSessionId: 'runtime_1',
+                status: 'running',
+                workspacePath: '/home/jhz/projects/agent-dock',
+              ),
+            ],
+            voice: VoiceConfig(
+              doubaoDirectAvailable: true,
+              providerCredentials: DoubaoVoiceCredentials(
+                appId: 'your-app-id',
+                accessToken: 'your-access-token',
+                resourceId: 'volc.bigasr.sauc.duration',
+                websocketUrl:
+                    'wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async',
+              ),
+            ),
+          ),
+        ),
+        voiceStorage: voiceStorage,
+      );
+
+      await tester.enterText(find.byType(TextField).at(0), 'workspace');
+      await tester.enterText(find.byType(TextField).at(1), '1234');
+      await tester.tap(find.text('Sign in'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byTooltip('Settings'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Configure Doubao voice'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Daemon-managed voice input is active.'), findsNothing);
+      expect(find.widgetWithText(TextField, 'App ID'), findsOneWidget);
+      expect(find.widgetWithText(TextField, 'Access Token'), findsOneWidget);
+      expect(find.widgetWithText(TextField, 'Resource ID'), findsOneWidget);
+      expect(find.widgetWithText(TextField, 'WebSocket URL'), findsOneWidget);
+      expect(find.text('Save voice settings'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'placeholder provider credentials fall back to saved local Doubao direct config',
+    (tester) async {
+      final voiceStorage = MemoryVoiceCredentialsStorage()
+        ..seed(
+          daemonUrl: Uri.parse('https://daemon.example.com'),
+          userId: 'usr_workspace',
+          credentials: const DoubaoVoiceCredentials(
+            appId: 'test-app-id',
+            accessToken: 'test-access-token',
+            resourceId: 'volc.test.resource',
+            websocketUrl:
+                'wss://example.com/test-voice',
+          ),
+        );
+      final socket = FakeDoubaoSocketConnection();
+      final socketClient = FakeDoubaoSocketClient(socket);
+      await pumpApp(
+        tester,
+        api: FakeDaemonApi(
+          bootstrap: const MobileBootstrap(
+            daemonVersion: '0.1.0',
+            user: CurrentUser(id: 'usr_workspace', displayName: 'Workspace'),
+            roots: <WorkspaceRoot>[],
+            sessions: [
+              SessionSummary(
+                id: 'sess_1',
+                title: 'Mobile migration',
+                agentKind: 'codex',
+                sourceKind: 'managed',
+                runtimeSessionId: 'runtime_1',
+                status: 'running',
+                workspacePath: '/home/jhz/projects/agent-dock',
+              ),
+            ],
+            voice: VoiceConfig(
+              doubaoDirectAvailable: true,
+              providerCredentials: DoubaoVoiceCredentials(
+                appId: 'your-app-id',
+                accessToken: 'your-access-token',
+                resourceId: 'volc.bigasr.sauc.duration',
+                websocketUrl:
+                    'wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async',
+              ),
+            ),
+          ),
+        ),
+        voiceStorage: voiceStorage,
+        doubaoSocketClient: socketClient,
+        doubaoRecorder: FakeDoubaoRecorder(
+          stream: Stream<Uint8List>.value(Uint8List.fromList(const [1, 2, 3])),
+        ),
+      );
+
+      await tester.enterText(find.byType(TextField).at(0), 'workspace');
+      await tester.enterText(find.byType(TextField).at(1), '1234');
+      await tester.tap(find.text('Sign in'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Mobile migration'));
+      await tester.pumpAndSettle();
+
+      scheduleMicrotask(() async {
+        socket.emit(buildTranscriptResponseFrame('hello', isFinal: false));
+        await socket.waitForSentFrames(3);
+        await Future<void>.delayed(const Duration(milliseconds: 40));
+        socket.emit(buildTranscriptResponseFrame('hello world', isFinal: true));
+      });
+
+      await tester.tap(find.byTooltip('Voice input'));
+      await tester.pumpAndSettle();
+
+      expect(find.widgetWithText(TextField, 'hello world'), findsOneWidget);
+      expect(socketClient.requests, hasLength(1));
+      final request = socketClient.requests.single;
+      expect(
+        request.url,
+        'wss://example.com/test-voice',
+      );
+      expect(request.headers['X-Api-App-Key'], 'test-app-id');
+      expect(
+        request.headers['X-Api-Access-Key'],
+        'test-access-token',
+      );
+      expect(
+        request.headers['X-Api-Resource-Id'],
+        'volc.test.resource',
+      );
+    },
+  );
+
+  testWidgets(
     'voice settings opens as a mobile bottom sheet instead of an alert dialog',
     (tester) async {
       final voiceStorage = MemoryVoiceCredentialsStorage();
@@ -12208,6 +12522,81 @@ void main() {
       'sess_1:include screenshot|/tmp/attachments/sess_1/screenshot.png',
     ]);
     expect(find.text('screenshot.png'), findsNothing);
+  });
+
+  testWidgets('composer actions are grouped inside a unified composer surface', (
+    tester,
+  ) async {
+    final api = FakeDaemonApi(
+      bootstrap: MobileBootstrap(
+        daemonVersion: '0.1.0',
+        user: const CurrentUser(id: 'usr_workspace', displayName: 'Workspace'),
+        roots: const <WorkspaceRoot>[],
+        sessions: const [
+          SessionSummary(
+            id: 'sess_1',
+            title: 'Mobile migration',
+            agentKind: 'codex',
+            sourceKind: 'managed',
+            runtimeSessionId: 'runtime_1',
+            status: 'running',
+            workspacePath: '/home/jhz/projects/agent-dock',
+          ),
+        ],
+        voice: const VoiceConfig(doubaoDirectAvailable: false),
+      ),
+      snapshot: const SessionSnapshot(
+        id: 'sess_1',
+        title: 'Mobile migration',
+        agentKind: 'codex',
+        sourceKind: 'managed',
+        runtimeSessionId: 'runtime_1',
+        workspacePath: '/home/jhz/projects/agent-dock',
+        status: 'running',
+        hasMoreHistory: false,
+        events: <SessionEvent>[],
+      ),
+    );
+
+    await pumpApp(tester, api: api);
+
+    await tester.enterText(find.byType(TextField).at(0), 'workspace');
+    await tester.enterText(find.byType(TextField).at(1), '1234');
+    await tester.tap(find.text('Sign in'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Mobile migration'));
+    await tester.pumpAndSettle();
+
+    final surfaceFinder = find.byKey(const ValueKey('composer-input-surface'));
+    expect(surfaceFinder, findsOneWidget);
+    expect(
+      find.descendant(
+        of: surfaceFinder,
+        matching: find.byTooltip('Attach image'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: surfaceFinder,
+        matching: find.widgetWithText(TextField, 'Message the agent'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: surfaceFinder,
+        matching: find.byTooltip('Voice input unavailable'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: surfaceFinder,
+        matching: find.byTooltip('Send'),
+      ),
+      findsOneWidget,
+    );
   });
 
   testWidgets('attachment picker lets the user choose camera or gallery', (
@@ -17545,9 +17934,15 @@ class FakeVoiceInputController implements VoiceInputController {
   final Object? error;
   var startCount = 0;
   var cancelCount = 0;
+  var prepareCount = 0;
 
   @override
   bool get isConfigured => true;
+
+  @override
+  Future<void> prepare() async {
+    prepareCount += 1;
+  }
 
   @override
   Future<String> listenForTranscript() async {
@@ -17595,6 +17990,9 @@ class CancelableFakeVoiceInputController implements VoiceInputController {
 
   @override
   bool get isConfigured => true;
+
+  @override
+  Future<void> prepare() async {}
 
   @override
   Future<String> listenForTranscript() async {

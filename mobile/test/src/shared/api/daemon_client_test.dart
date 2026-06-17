@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:agent_dock_mobile/src/shared/api/daemon_client.dart';
@@ -599,6 +601,44 @@ void main() {
         ),
       );
     });
+  });
+
+  test('IoDaemonHttpTransport sends JSON request bodies with UTF-8 encoding', () async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(server.close);
+
+    final requestBody = Completer<List<int>>();
+    final contentType = Completer<String?>();
+    unawaited(() async {
+      final request = await server.first;
+      contentType.complete(request.headers.contentType?.toString());
+      final bytes = await request.fold<List<int>>(
+        <int>[],
+        (buffer, chunk) => buffer..addAll(chunk),
+      );
+      requestBody.complete(bytes);
+      request.response
+        ..statusCode = 200
+        ..headers.contentType = ContentType.json
+        ..write(jsonEncode({'ok': true}));
+      await request.response.close();
+    }());
+
+    final transport = IoDaemonHttpTransport();
+    await transport.send(
+      TransportRequest(
+        method: 'POST',
+        url: Uri.parse('http://127.0.0.1:${server.port}/messages'),
+        headers: const {'content-type': 'application/json'},
+        body: jsonEncode({'message': '项目里面有什么', 'imagePaths': <String>[]}),
+      ),
+    );
+
+    expect(utf8.decode(await requestBody.future), jsonEncode({
+      'message': '项目里面有什么',
+      'imagePaths': <String>[],
+    }));
+    expect(await contentType.future, 'application/json');
   });
 }
 

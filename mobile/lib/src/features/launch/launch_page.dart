@@ -10,7 +10,7 @@ typedef SignInCallback =
 typedef TestDaemonCallback = Future<void> Function(Uri daemonUrl);
 typedef OpenDaemonSetupCallback = Future<void> Function();
 
-const _localDevelopmentDaemonUrl = 'http://10.0.2.2:4123';
+const _localDevelopmentDaemonUrl = 'https://dockapi.lark.video/';
 const _launchOfflineText = 'Offline. Waiting for network...';
 
 class LaunchPage extends StatefulWidget {

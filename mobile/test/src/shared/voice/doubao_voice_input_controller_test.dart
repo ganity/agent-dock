@@ -413,6 +413,28 @@ void main() {
         expect(recorder.stopped, isTrue);
       },
     );
+
+    test(
+      'prepare warms local audio permission without starting audio or transport',
+      () async {
+        final transport = FakeDoubaoVoiceTransport();
+        final recorder = FakeAudioRecorder(
+          stream: Stream<Uint8List>.value(Uint8List.fromList(const [1, 2, 3])),
+        );
+        final controller = DoubaoVoiceInputController(
+          credentials: _credentials,
+          transport: transport,
+          audioSource: RecordDoubaoAudioSource(recorder: recorder),
+        );
+
+        await controller.prepare();
+
+        expect(recorder.permissionChecks, [false]);
+        expect(recorder.startedConfig, isNull);
+        expect(recorder.stopped, isFalse);
+        expect(transport.connectedCredentials, isNull);
+      },
+    );
   });
 }
 
@@ -522,8 +544,14 @@ class FakeDoubaoAudioSource implements DoubaoAudioSource {
   final List<Uint8List> chunks;
   final int chunkDelayMs;
   var permissionRequested = false;
+  var prepareCount = 0;
   var started = false;
   var stopped = false;
+
+  @override
+  Future<void> prepare() async {
+    prepareCount += 1;
+  }
 
   @override
   Future<bool> requestPermission() async {
@@ -553,11 +581,13 @@ class FakeAudioRecorder implements DoubaoRecorder {
 
   final Stream<Uint8List> stream;
   var permissionRequested = false;
+  final permissionChecks = <bool>[];
   var stopped = false;
   RecordConfig? startedConfig;
 
   @override
   Future<bool> hasPermission({bool request = true}) async {
+    permissionChecks.add(request);
     permissionRequested = request;
     return true;
   }

@@ -31,6 +31,24 @@ class DoubaoVoiceCredentials {
   final String resourceId;
   final String websocketUrl;
 
+  bool get isUsable {
+    final normalizedAppId = appId.trim().toLowerCase();
+    final normalizedAccessToken = accessToken.trim().toLowerCase();
+    final normalizedResourceId = resourceId.trim();
+    final normalizedWebsocketUrl = websocketUrl.trim();
+    if (normalizedAppId.isEmpty ||
+        normalizedAccessToken.isEmpty ||
+        normalizedResourceId.isEmpty ||
+        normalizedWebsocketUrl.isEmpty) {
+      return false;
+    }
+    if (normalizedAppId == 'your-app-id' ||
+        normalizedAccessToken == 'your-access-token') {
+      return false;
+    }
+    return true;
+  }
+
   Map<String, Object?> toJson() {
     return {
       'appId': appId,

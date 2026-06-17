@@ -414,7 +414,7 @@ class IoDaemonHttpTransport implements DaemonHttpTransport {
     request.headers.forEach(httpRequest.headers.set);
     final body = request.body;
     if (body != null) {
-      httpRequest.write(body);
+      httpRequest.add(utf8.encode(body));
     }
     final bodyBytes = request.bodyBytes;
     if (bodyBytes != null) {
