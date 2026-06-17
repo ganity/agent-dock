@@ -1,0 +1,231 @@
+<style>
+  .hero {
+    display: grid;
+    gap: 12px;
+    margin-bottom: 18px;
+  }
+
+  .hero p {
+    margin: 0;
+  }
+
+  .tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    border-radius: 999px;
+    background: rgba(120, 158, 188, 0.12);
+    color: #506575;
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .cards {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .card {
+    overflow: hidden;
+  }
+
+  .preview {
+    width: min(100%, 240px);
+    aspect-ratio: 1;
+    border-radius: 28px;
+    position: relative;
+    overflow: hidden;
+    background:
+      radial-gradient(circle at 24% 20%, rgba(255,255,255,0.88), rgba(255,255,255,0) 26%),
+      linear-gradient(150deg, #f8fcff 0%, #e8f6ff 44%, #d9f7f0 100%);
+    border: 1px solid rgba(122, 162, 191, 0.18);
+    box-shadow:
+      inset 0 1px 0 rgba(255,255,255,0.85),
+      0 18px 36px rgba(123, 169, 200, 0.18);
+  }
+
+  .glow {
+    position: absolute;
+    inset: auto;
+    width: 56%;
+    height: 56%;
+    right: -10%;
+    bottom: -8%;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(135, 230, 204, 0.28), transparent 70%);
+  }
+
+  .concept-a .frame {
+    position: absolute;
+    inset: 20% 19% 23% 19%;
+    border-radius: 22px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.9), rgba(237,248,255,0.92));
+    border: 1px solid rgba(114, 168, 206, 0.2);
+    box-shadow: 0 12px 26px rgba(125, 167, 194, 0.16);
+  }
+
+  .concept-a .frame::before {
+    content: "";
+    position: absolute;
+    inset: 0 auto auto 0;
+    width: 100%;
+    height: 20%;
+    border-radius: 22px 22px 14px 14px;
+    background: linear-gradient(180deg, rgba(207,236,255,0.9), rgba(231,245,255,0.4));
+  }
+
+  .concept-a .dot,
+  .concept-a .line {
+    position: absolute;
+  }
+
+  .concept-a .dot {
+    width: 10%;
+    height: 10%;
+    left: 28%;
+    top: 40%;
+    border-radius: 50%;
+    background: linear-gradient(180deg, #57c5ff, #2f98e8);
+    box-shadow: 16px 0 0 rgba(87,197,255,0.28);
+  }
+
+  .concept-a .line {
+    width: 30%;
+    height: 6%;
+    left: 40%;
+    top: 42%;
+    border-radius: 999px;
+    background: linear-gradient(90deg, #7bd7ff, #88e3c7);
+  }
+
+  .concept-b .stack {
+    position: absolute;
+    inset: 18%;
+  }
+
+  .concept-b .panel {
+    position: absolute;
+    border-radius: 22px;
+    box-shadow: 0 14px 24px rgba(112, 157, 190, 0.14);
+    border: 1px solid rgba(112, 164, 199, 0.18);
+  }
+
+  .concept-b .panel-1 {
+    inset: 0 20% 20% 0;
+    background: linear-gradient(160deg, #ffffff 0%, #ebf7ff 100%);
+  }
+
+  .concept-b .panel-2 {
+    inset: 18% 4% 4% 18%;
+    background: linear-gradient(160deg, #f5fcff 0%, #dcf6ef 100%);
+  }
+
+  .concept-b .panel-3 {
+    inset: 40% 24% 0 0;
+    background: linear-gradient(160deg, #d9f1ff 0%, #8edcf5 100%);
+  }
+
+  .concept-c .mark {
+    position: absolute;
+    inset: 20%;
+  }
+
+  .concept-c .shape {
+    position: absolute;
+    border-radius: 24px;
+    transform: rotate(-18deg);
+    box-shadow: 0 14px 24px rgba(117, 164, 198, 0.14);
+  }
+
+  .concept-c .shape-1 {
+    inset: 0 28% 30% 0;
+    background: linear-gradient(160deg, #ffffff 0%, #e7f5ff 100%);
+    border: 1px solid rgba(104, 163, 210, 0.18);
+  }
+
+  .concept-c .shape-2 {
+    inset: 28% 0 0 30%;
+    background: linear-gradient(160deg, #dff4ff 0%, #c7f4e7 100%);
+    border: 1px solid rgba(110, 183, 191, 0.18);
+  }
+
+  .concept-c .shape-3 {
+    position: absolute;
+    width: 20%;
+    height: 20%;
+    left: 38%;
+    top: 38%;
+    border-radius: 10px;
+    background: linear-gradient(160deg, #55c5ff 0%, #6edccf 100%);
+    transform: rotate(-18deg);
+  }
+
+  .mini-pros {
+    margin-top: 10px;
+    font-size: 13px;
+    color: #637889;
+  }
+</style>
+
+<div class="hero">
+  <div class="tag">Refined Icon Concepts</div>
+  <h2>更接近最终图标的 3 个方案</h2>
+  <p class="subtitle">
+    已按你的偏好收敛：Flutter 式轻盈几何、浅色科技感、隐含 Dock/窗口语义、保留一点工具属性。
+  </p>
+</div>
+
+<div class="cards">
+  <div class="card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="preview concept-a">
+        <div class="glow"></div>
+        <div class="frame"></div>
+        <div class="dot"></div>
+        <div class="line"></div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>A. 轻窗终端</h3>
+      <p>一个轻量窗口里放简化的命令行信号。语义最直接，工具属性最明确。</p>
+      <div class="mini-pros">优点：一眼能看懂是工作台类产品。</div>
+    </div>
+  </div>
+
+  <div class="card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="preview concept-b">
+        <div class="glow"></div>
+        <div class="stack">
+          <div class="panel panel-1"></div>
+          <div class="panel panel-2"></div>
+          <div class="panel panel-3"></div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>B. Dock 叠层</h3>
+      <p>突出多窗口停靠和切换，产品语义最强，也最贴近 “Dock”。</p>
+      <div class="mini-pros">优点：品牌独特性更强，不容易像通用聊天应用。</div>
+    </div>
+  </div>
+
+  <div class="card" data-choice="c" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="preview concept-c">
+        <div class="glow"></div>
+        <div class="mark">
+          <div class="shape shape-1"></div>
+          <div class="shape shape-2"></div>
+          <div class="shape-3"></div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>C. 几何停靠符号</h3>
+      <p>更抽象，延续 Flutter 那种轻快科技感，同时暗示窗口与停靠结构。</p>
+      <div class="mini-pros">优点：最像成熟 App 图标，简洁、现代、适合长期使用。</div>
+    </div>
+  </div>
+</div>

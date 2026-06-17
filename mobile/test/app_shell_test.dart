@@ -1723,6 +1723,61 @@ void main() {
   });
 
   testWidgets(
+    'opens a resumed session at the latest message from the initial snapshot',
+    (tester) async {
+      final events = List<SessionEvent>.generate(24, (index) {
+        final eventNumber = index + 1;
+        return SessionEvent(
+          id: eventNumber,
+          eventType: eventNumber.isEven ? 'assistant.message' : 'user.message',
+          payload: {'text': 'resumed event $eventNumber'},
+        );
+      });
+      final api = FakeDaemonApi(
+        bootstrap: MobileBootstrap(
+          daemonVersion: '0.1.0',
+          user: const CurrentUser(id: 'usr_workspace', displayName: 'Workspace'),
+          roots: const <WorkspaceRoot>[],
+          sessions: const [
+            SessionSummary(
+              id: 'sess_1',
+              title: 'Mobile migration',
+              agentKind: 'codex',
+              sourceKind: 'managed',
+              runtimeSessionId: 'runtime_1',
+              status: 'suspended',
+              workspacePath: '/home/jhz/projects/agent-dock',
+            ),
+          ],
+          voice: VoiceConfig(doubaoDirectAvailable: false),
+        ),
+        resumeResult: SessionSnapshot(
+          id: 'sess_1',
+          title: 'Mobile migration',
+          agentKind: 'codex',
+          sourceKind: 'managed',
+          runtimeSessionId: 'runtime_1',
+          workspacePath: '/home/jhz/projects/agent-dock',
+          status: 'running',
+          hasMoreHistory: false,
+          events: events,
+        ),
+      );
+      await pumpApp(tester, api: api);
+
+      await tester.enterText(find.byType(TextField).at(0), 'workspace');
+      await tester.enterText(find.byType(TextField).at(1), '1234');
+      await tester.tap(find.text('Sign in'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Mobile migration'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('resumed event 24'), findsOneWidget);
+      expect(find.text('resumed event 1'), findsNothing);
+    },
+  );
+
+  testWidgets(
     'attached runtime card opens details and can copy the runtime session id',
     (tester) async {
       final clipboardTexts = <String>[];
@@ -2459,7 +2514,7 @@ void main() {
     await tester.tap(find.text('Copy assistant'));
     await tester.pumpAndSettle();
 
-    await tester.longPress(find.text('Assistant'));
+    await tester.longPress(find.text('Done'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Copy assistant message'));
     await tester.pumpAndSettle();
@@ -2467,6 +2522,63 @@ void main() {
     expect(clipboardTexts, ['## Done\n\n- Copy this markdown']);
     expect(find.text('Assistant message copied'), findsOneWidget);
     expect(hapticCalls, contains('HapticFeedbackType.selectionClick'));
+  });
+
+  testWidgets('renders assistant messages without an assistant title', (
+    tester,
+  ) async {
+    await pumpApp(
+      tester,
+      api: FakeDaemonApi(
+        bootstrap: MobileBootstrap(
+          daemonVersion: '0.1.0',
+          user: const CurrentUser(
+            id: 'usr_workspace',
+            displayName: 'Workspace',
+          ),
+          roots: const <WorkspaceRoot>[],
+          sessions: const [
+            SessionSummary(
+              id: 'sess_1',
+              title: 'Assistant direct',
+              agentKind: 'codex',
+              sourceKind: 'managed',
+              runtimeSessionId: 'runtime_1',
+              status: 'running',
+              workspacePath: '/home/jhz/projects/agent-dock',
+            ),
+          ],
+          voice: const VoiceConfig(doubaoDirectAvailable: false),
+        ),
+        snapshot: const SessionSnapshot(
+          id: 'sess_1',
+          title: 'Assistant direct',
+          agentKind: 'codex',
+          sourceKind: 'managed',
+          runtimeSessionId: 'runtime_1',
+          workspacePath: '/home/jhz/projects/agent-dock',
+          status: 'running',
+          hasMoreHistory: false,
+          events: [
+            SessionEvent(
+              id: 1,
+              eventType: 'assistant.message',
+              payload: {'text': 'Direct assistant content'},
+            ),
+          ],
+        ),
+      ),
+    );
+
+    await tester.enterText(find.byType(TextField).at(0), 'workspace');
+    await tester.enterText(find.byType(TextField).at(1), '1234');
+    await tester.tap(find.text('Sign in'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Assistant direct'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Assistant'), findsNothing);
+    expect(find.text('Direct assistant content'), findsOneWidget);
   });
 
   testWidgets('renders assistant markdown headings and lists', (tester) async {
@@ -3492,7 +3604,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Reply before tool'), findsOneWidget);
-      expect(find.text('shell'), findsOneWidget);
+      expect(find.text('npm test'), findsOneWidget);
       expect(
         find.byKey(const ValueKey('assistant-typing-indicator')),
         findsNothing,
@@ -4452,6 +4564,26 @@ void main() {
     await tester.tap(find.text('Mobile migration'));
     await tester.pumpAndSettle();
 
+    expect(find.text('Activity'), findsNothing);
+    expect(find.text('2 events · commandExecution completed'), findsOneWidget);
+    expect(find.text('commandExecution completed '), findsNothing);
+    expect(
+      find.byKey(
+        const ValueKey(
+          'activity-summary-count-value-commandExecution-completed-2',
+        ),
+      ),
+      findsNothing,
+    );
+    expect(find.text('tool.call.completed'), findsNothing);
+    expect(
+      find.byKey(const ValueKey('activity-summary-active-indicator')),
+      findsNothing,
+    );
+
+    await tester.tap(find.text('2 events · commandExecution completed'));
+    await tester.pumpAndSettle();
+
     expect(find.text('Activity'), findsOneWidget);
     expect(find.text('commandExecution completed '), findsOneWidget);
     expect(
@@ -4461,11 +4593,6 @@ void main() {
         ),
       ),
       findsOneWidget,
-    );
-    expect(find.text('tool.call.completed'), findsNothing);
-    expect(
-      find.byKey(const ValueKey('activity-summary-active-indicator')),
-      findsNothing,
     );
   });
 
@@ -4531,6 +4658,13 @@ void main() {
       await tester.tap(find.text('Tool activity'));
       await tester.pumpAndSettle();
 
+      expect(find.text('Activity'), findsNothing);
+      expect(find.text('2 events · commandExecution started'), findsOneWidget);
+      expect(find.text('commandExecution started '), findsNothing);
+      expect(find.text('commandExecution completed '), findsNothing);
+      await tester.tap(find.text('2 events · commandExecution started'));
+      await tester.pumpAndSettle();
+
       expect(find.text('Activity'), findsOneWidget);
       expect(find.text('commandExecution started '), findsOneWidget);
       expect(find.text('commandExecution completed '), findsOneWidget);
@@ -4557,11 +4691,12 @@ void main() {
       final opacityFinder = find.byKey(
         const ValueKey('activity-summary-active-indicator-opacity'),
       );
-      expect(tester.widget<Opacity>(opacityFinder).opacity, 1);
+      final initialOpacity = tester.widget<Opacity>(opacityFinder).opacity;
+      expect(initialOpacity, anyOf(1, 0.24));
 
       await tester.pump(const Duration(milliseconds: 700));
 
-      expect(tester.widget<Opacity>(opacityFinder).opacity, isNot(1));
+      expect(tester.widget<Opacity>(opacityFinder).opacity, isNot(initialOpacity));
     },
   );
 
@@ -4617,7 +4752,11 @@ void main() {
     await tester.tap(find.text('Activity count transition'));
     await tester.pumpAndSettle();
 
-    expect(find.text('commandExecution completed '), findsOneWidget);
+    expect(find.text('1 event · commandExecution completed'), findsOneWidget);
+    expect(find.text('commandExecution completed '), findsNothing);
+    await tester.tap(find.text('1 event · commandExecution completed'));
+    await tester.pumpAndSettle();
+    expect(find.text('Activity'), findsOneWidget);
     expect(
       find.byKey(
         const ValueKey(
@@ -4687,6 +4826,7 @@ void main() {
       1,
     );
     expect(activityCard, findsOneWidget);
+    expect(find.text('2 events · commandExecution completed'), findsOneWidget);
 
     await liveEvents.close();
   });
@@ -4753,6 +4893,10 @@ void main() {
     await tester.tap(find.text('Sign in'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Tool activity'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('1 event · commandExecution started'), findsOneWidget);
+    await tester.tap(find.text('1 event · commandExecution started'));
     await tester.pumpAndSettle();
 
     final opacityFinder = find.byKey(
@@ -5023,7 +5167,7 @@ void main() {
   );
 
   testWidgets(
-    'renders shell and file change cards collapsed by default and expands on tap',
+    'renders shell and file change cards as compact summaries and expands on tap',
     (tester) async {
       await pumpApp(
         tester,
@@ -5111,32 +5255,32 @@ void main() {
       await tester.tap(find.text('Tool details'));
       await tester.pumpAndSettle();
 
-      expect(find.text('shell'), findsOneWidget);
+      expect(find.text('shell'), findsNothing);
       expect(find.text('npm test'), findsOneWidget);
-      expect(find.text('Files changed'), findsOneWidget);
-      expect(find.text('1 file'), findsOneWidget);
+      expect(find.text('Files changed'), findsNothing);
+      expect(find.text('1 file · src/app.ts'), findsOneWidget);
       expect(find.text('Edited src/app.ts'), findsNothing);
-      expect(find.widgetWithText(Chip, 'completed'), findsNWidgets(2));
-      for (final chip in tester.widgetList<Chip>(
-        find.widgetWithText(Chip, 'completed'),
-      )) {
-        expect(chip.backgroundColor, _successStatusPillColor);
-      }
-      expect(find.byIcon(Icons.check_circle_outline), findsOneWidget);
+      expect(find.widgetWithText(Chip, 'completed'), findsNothing);
+      expect(
+        find.byKey(const ValueKey('compact-timeline-status-dot-success')),
+        findsNWidgets(2),
+      );
       expect(find.text('PASS src/app.test.ts'), findsNothing);
       expect(find.text('src/app.ts'), findsNothing);
       expect(find.textContaining('@@\n-old\n+new'), findsNothing);
 
-      await tester.tap(find.text('shell'));
+      await tester.tap(find.text('npm test'));
       await tester.pumpAndSettle();
 
+      expect(find.text('shell'), findsOneWidget);
       expect(find.text('PASS src/app.test.ts'), findsOneWidget);
       expect(find.text('exit 0'), findsOneWidget);
       expect(find.text('42ms'), findsOneWidget);
 
-      await tester.tap(find.text('Files changed'));
+      await tester.tap(find.text('1 file · src/app.ts'));
       await tester.pumpAndSettle();
 
+      expect(find.text('Files changed'), findsOneWidget);
       expect(find.text('src/app.ts'), findsNWidgets(2));
       expect(find.text('@@'), findsOneWidget);
       expect(find.text('-old'), findsOneWidget);
@@ -5252,22 +5396,22 @@ void main() {
     await tester.tap(find.text('Copy tool cards'));
     await tester.pumpAndSettle();
 
-    await tester.longPress(find.text('shell'));
+    await tester.longPress(find.text('npm test'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Copy command'));
     await tester.pumpAndSettle();
 
-    await tester.longPress(find.text('shell'));
+    await tester.longPress(find.text('npm test'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Copy output'));
     await tester.pumpAndSettle();
 
-    await tester.longPress(find.text('Files changed'));
+    await tester.longPress(find.text('1 file · src/app.ts'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Copy path'));
     await tester.pumpAndSettle();
 
-    await tester.longPress(find.text('Files changed'));
+    await tester.longPress(find.text('1 file · src/app.ts'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Copy diff'));
     await tester.pumpAndSettle();
@@ -5350,7 +5494,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Diff colors'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Files changed'));
+    await tester.tap(find.text('1 file · src/app.ts'));
     await tester.pumpAndSettle();
 
     expect(find.textContaining('@@\n context\n-old\n+new'), findsNothing);
@@ -5426,7 +5570,7 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Files changed'));
+    await tester.tap(find.text('1 file · src/app.ts'));
     await tester.pumpAndSettle();
 
     final diffText = tester.widget<Text>(find.text('+new'));
@@ -5505,7 +5649,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('File kinds'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Files changed'));
+    await tester.tap(find.text('2 files · src/app.ts'));
     await tester.pumpAndSettle();
 
     expect(find.text('src/app.ts'), findsWidgets);
@@ -5582,7 +5726,9 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('File rename'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Files changed'));
+    await tester.tap(
+      find.text('1 file · src/old_name.dart -> src/new_name.dart'),
+    );
     await tester.pumpAndSettle();
 
     expect(find.text('src/old_name.dart -> src/new_name.dart'), findsOneWidget);
@@ -5653,12 +5799,12 @@ void main() {
     await tester.tap(find.text('Failed command'));
     await tester.pumpAndSettle();
 
-    expect(find.byIcon(Icons.error_outline), findsOneWidget);
-    final failedChip = tester.widget<Chip>(
-      find.widgetWithText(Chip, 'completed'),
+    expect(
+      find.byKey(const ValueKey('compact-timeline-status-dot-failure')),
+      findsOneWidget,
     );
-    expect(failedChip.backgroundColor, _failureStatusPillColor);
-
+    expect(find.text('shell'), findsOneWidget);
+    expect(find.text('npm test'), findsWidgets);
     expect(find.text('FAIL src/app.test.ts'), findsOneWidget);
     expect(find.text('exit 1'), findsOneWidget);
   });
@@ -5807,7 +5953,7 @@ void main() {
         findsOneWidget,
       );
 
-      await tester.tap(find.text('shell'));
+      await tester.tap(find.text('npm test'));
       await tester.pumpAndSettle();
 
       expect(find.text('FAIL src/app.test.ts'), findsOneWidget);
@@ -5880,7 +6026,7 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('Long output'));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('shell'));
+      await tester.tap(find.text('npm test'));
       await tester.pumpAndSettle();
 
       expect(find.text('output line 1'), findsOneWidget);
@@ -6027,11 +6173,11 @@ void main() {
       findsOneWidget,
     );
 
-    await tester.tap(find.text('shell'));
+    await tester.tap(find.text('npm test'));
     await tester.pumpAndSettle();
     expect(find.text('Waiting for output...'), findsOneWidget);
 
-    await tester.tap(find.text('Files changed'));
+    await tester.tap(find.text('1 file · src/app.ts'));
     await tester.pumpAndSettle();
     expect(find.text('Preparing changes...'), findsOneWidget);
   });
@@ -6280,7 +6426,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Tool output fade'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('shell'));
+    await tester.tap(find.text('npm test'));
     await tester.pumpAndSettle();
 
     expect(find.text('Waiting for output...'), findsOneWidget);
@@ -6395,7 +6541,7 @@ void main() {
         findsNothing,
       );
       expect(find.widgetWithText(Chip, 'inProgress'), findsOneWidget);
-      await tester.tap(find.text('Files changed'));
+      await tester.tap(find.text('2 files · src/app.ts'));
       await tester.pumpAndSettle();
       expect(find.text('Preparing changes...'), findsOneWidget);
 
@@ -6516,7 +6662,7 @@ void main() {
     await tester.tap(find.text('File change count transition'));
     await tester.pumpAndSettle();
 
-    expect(find.text('1 file'), findsOneWidget);
+    expect(find.text('1 file · src/app.ts'), findsOneWidget);
     final fileCard = find.byKey(
       const ValueKey('timeline-item-fileChange:patch-1'),
     );
@@ -6634,11 +6780,11 @@ void main() {
       await tester.tap(find.text('Reported files'));
       await tester.pumpAndSettle();
 
-      expect(find.text('Files changed'), findsOneWidget);
+      expect(find.text('Files changed'), findsNothing);
       expect(find.text('2 files'), findsOneWidget);
       expect(find.text('Edited 2 files'), findsNothing);
 
-      await tester.tap(find.text('Files changed'));
+      await tester.tap(find.text('2 files · src/app.ts'));
       await tester.pumpAndSettle();
 
       expect(find.text('src/app.ts'), findsOneWidget);
@@ -7817,7 +7963,7 @@ void main() {
   );
 
   testWidgets(
-    'reopening the same session restores the in-memory timeline scroll position',
+    'reopening the same session opens at the latest message',
     (tester) async {
       final events = List<SessionEvent>.generate(24, (index) {
         return SessionEvent(
@@ -7883,11 +8029,14 @@ void main() {
       await tester.tap(find.text('Mobile migration'));
       await tester.pumpAndSettle();
 
-      final restoredOffset = tester
-          .widget<ListView>(find.byType(ListView).last)
-          .controller!
-          .offset;
-      expect(restoredOffset, closeTo(scrolledOffset, 1));
+      final reopenedTimeline = tester.widget<ListView>(find.byType(ListView).last);
+      final reopenedController = reopenedTimeline.controller!;
+      expect(
+        reopenedController.offset,
+        closeTo(reopenedController.position.maxScrollExtent, 1),
+      );
+      expect(find.textContaining('message 23'), findsOneWidget);
+      expect(find.textContaining('message 0'), findsNothing);
       expect(api.snapshotRequests, ['sess_1:tok_workspace:null']);
     },
   );
@@ -8207,7 +8356,7 @@ void main() {
       await tester.tap(find.text('Lifecycle expansion'));
       await tester.pumpAndSettle();
 
-      await tester.tap(find.text('shell'));
+      await tester.tap(find.text('npm test'));
       await tester.pumpAndSettle();
 
       expect(find.text('older assistant context'), findsOneWidget);

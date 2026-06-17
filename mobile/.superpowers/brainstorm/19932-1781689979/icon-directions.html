@@ -1,0 +1,203 @@
+<style>
+  .hero {
+    display: grid;
+    gap: 12px;
+    margin-bottom: 20px;
+  }
+
+  .hero p {
+    margin: 0;
+  }
+
+  .cards {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .card {
+    overflow: hidden;
+  }
+
+  .preview {
+    aspect-ratio: 1;
+    border-radius: 28px;
+    display: grid;
+    place-items: center;
+    position: relative;
+    overflow: hidden;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  .preview-a {
+    background:
+      radial-gradient(circle at 30% 25%, rgba(255,255,255,0.18), transparent 30%),
+      linear-gradient(160deg, #12202d 0%, #1d3f58 45%, #3ecf8e 100%);
+  }
+
+  .preview-a::before,
+  .preview-a::after {
+    content: "";
+    position: absolute;
+    background: rgba(244, 251, 255, 0.94);
+    border-radius: 999px;
+    transform: rotate(-40deg);
+  }
+
+  .preview-a::before {
+    width: 28%;
+    height: 56%;
+    box-shadow: 0 0 0 16px rgba(10, 20, 28, 0.12);
+  }
+
+  .preview-a::after {
+    width: 10%;
+    height: 36%;
+    left: 56%;
+    top: 30%;
+    background: #9ef0cb;
+  }
+
+  .preview-b {
+    background:
+      linear-gradient(135deg, #09151f 0%, #0f2d42 50%, #174f73 100%);
+  }
+
+  .terminal-frame {
+    width: 72%;
+    height: 56%;
+    border-radius: 22px;
+    background: rgba(10, 18, 26, 0.82);
+    border: 2px solid rgba(162, 247, 207, 0.28);
+    box-shadow: 0 18px 40px rgba(0, 0, 0, 0.28);
+    position: relative;
+  }
+
+  .terminal-frame::before {
+    content: "";
+    position: absolute;
+    top: 12%;
+    left: 12%;
+    width: 16%;
+    height: 16%;
+    border-radius: 50%;
+    background: #45d483;
+    box-shadow:
+      22px 0 0 rgba(69, 212, 131, 0.25),
+      44px 0 0 rgba(69, 212, 131, 0.15);
+  }
+
+  .terminal-frame::after {
+    content: ">";
+    position: absolute;
+    left: 16%;
+    top: 38%;
+    font-size: 52px;
+    font-weight: 800;
+    color: #f3fbff;
+    line-height: 1;
+  }
+
+  .preview-c {
+    background:
+      radial-gradient(circle at 18% 20%, rgba(255,255,255,0.22), transparent 22%),
+      linear-gradient(150deg, #1a1a1a 0%, #27313d 38%, #6d8da6 100%);
+  }
+
+  .dock-stack {
+    width: 66%;
+    height: 66%;
+    position: relative;
+  }
+
+  .dock-stack span {
+    position: absolute;
+    inset: auto;
+    border-radius: 22px;
+    transform: rotate(-18deg);
+  }
+
+  .dock-stack span:nth-child(1) {
+    width: 68%;
+    height: 68%;
+    left: 4%;
+    top: 4%;
+    background: rgba(255,255,255,0.94);
+  }
+
+  .dock-stack span:nth-child(2) {
+    width: 68%;
+    height: 68%;
+    left: 18%;
+    top: 18%;
+    background: rgba(133, 224, 188, 0.9);
+  }
+
+  .dock-stack span:nth-child(3) {
+    width: 68%;
+    height: 68%;
+    left: 32%;
+    top: 32%;
+    background: rgba(22, 33, 44, 0.88);
+    border: 2px solid rgba(255,255,255,0.12);
+  }
+
+  .tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    border-radius: 999px;
+    background: rgba(255,255,255,0.06);
+    color: #c8d5df;
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+</style>
+
+<div class="hero">
+  <div class="tag">Agent Dock 图标方向选择</div>
+  <h2>先选品牌气质方向</h2>
+  <p class="subtitle">
+    这一轮不是最终图标，只是先决定图标该更像“智能助手”、“终端工作台”，还是“多会话停靠面板”。
+  </p>
+</div>
+
+<div class="cards">
+  <div class="card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="preview preview-a"></div>
+    </div>
+    <div class="card-body">
+      <h3>A. 智能火花</h3>
+      <p>更偏 AI 助手感。轻、快、聪明，适合强调对话与协作。</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="preview preview-b">
+        <div class="terminal-frame"></div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>B. 终端工作台</h3>
+      <p>更偏工程工具感。强调 shell、执行、结果反馈和专业效率。</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="c" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="preview preview-c">
+        <div class="dock-stack">
+          <span></span>
+          <span></span>
+          <span></span>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>C. 会话停靠站</h3>
+      <p>更偏产品语义。突出 “Dock” 本身，表达多任务、多会话停靠与切换。</p>
+    </div>
+  </div>
+</div>

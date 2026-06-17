@@ -110,7 +110,6 @@ class _SessionDetailPageState extends State<SessionDetailPage>
   bool _isHandlingUnauthorized = false;
   bool _hasStartedEventStream = false;
   bool _hasAutoScrolledToLatest = false;
-  bool _hasRestoredScrollOffset = false;
   bool _isForbiddenSnapshot = false;
   int _pendingNewEventCount = 0;
   bool _hasPendingAssistantStreamUpdate = false;
@@ -337,7 +336,6 @@ class _SessionDetailPageState extends State<SessionDetailPage>
       _hasMoreHistory = initialSnapshot.hasMoreHistory;
       _cachedSnapshot = initialSnapshot;
       _resolvedSessionSummary = initialSnapshot.toSummary();
-      _hasAutoScrolledToLatest = true;
     } else if (cachedSession != null) {
       _events = List<SessionEvent>.from(cachedSession.events);
       _hasMoreHistory = cachedSession.hasMoreHistory;
@@ -357,7 +355,6 @@ class _SessionDetailPageState extends State<SessionDetailPage>
         events: cachedSession.events,
       );
       _resolvedSessionSummary = _cachedSnapshot?.toSummary();
-      _hasAutoScrolledToLatest = true;
     }
     if (api == null || token == null || session == null) {
       _snapshotFuture = Future<SessionSnapshot?>.value(null);
@@ -485,27 +482,6 @@ class _SessionDetailPageState extends State<SessionDetailPage>
     );
   }
 
-  void _restoreScrollOffsetFromCache() {
-    final cachedSnapshot = _cachedSnapshot;
-    if (_hasRestoredScrollOffset ||
-        cachedSnapshot == null ||
-        !_timelineScrollController.hasClients) {
-      return;
-    }
-    final cacheScope = _detailCacheScope;
-    final cacheStore = widget.sessionDetailCacheStore;
-    if (cacheScope == null || cacheStore == null) {
-      return;
-    }
-    final cachedOffset = cacheStore.readCache(scope: cacheScope)?.scrollOffset;
-    if (cachedOffset == null) {
-      return;
-    }
-    final maxScrollExtent = _timelineScrollController.position.maxScrollExtent;
-    _timelineScrollController.jumpTo(cachedOffset.clamp(0.0, maxScrollExtent));
-    _hasRestoredScrollOffset = true;
-  }
-
   List<String> get _slashSuggestions {
     final text = _messageController.text.trimLeft();
     if (!text.startsWith('/') && !text.startsWith('\$')) {
@@ -565,6 +541,29 @@ class _SessionDetailPageState extends State<SessionDetailPage>
     final position = _timelineScrollController.position;
     return (position.maxScrollExtent - position.pixels) <=
         _bottomProximityThreshold;
+  }
+
+  void _scheduleInitialScrollToLatest({int attempt = 0}) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _hasAutoScrolledToLatest) {
+        return;
+      }
+      if (!_timelineScrollController.hasClients) {
+        if (attempt < 3) {
+          _scheduleInitialScrollToLatest(attempt: attempt + 1);
+        }
+        return;
+      }
+      _timelineScrollController.jumpTo(
+        _timelineScrollController.position.maxScrollExtent,
+      );
+      if (attempt >= 3) {
+        _hasAutoScrolledToLatest = true;
+        _maybeLoadOlderEventsFromController();
+        return;
+      }
+      _scheduleInitialScrollToLatest(attempt: attempt + 1);
+    });
   }
 
   void _scrollToBottomAndClearNewUpdates() {
@@ -1436,20 +1435,8 @@ class _SessionDetailPageState extends State<SessionDetailPage>
       _syncAutoExpandedFailedToolWithCurrentEvents();
       _hasMoreHistory = snapshot.hasMoreHistory;
       _syncSessionDetailCache();
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted || _hasAutoScrolledToLatest) {
-          return;
-        }
-        if (!_timelineScrollController.hasClients) {
-          return;
-        }
-        _timelineScrollController.jumpTo(
-          _timelineScrollController.position.maxScrollExtent,
-        );
-        _hasAutoScrolledToLatest = true;
-        _maybeLoadOlderEventsFromController();
-      });
     }
+    _scheduleInitialScrollToLatest();
     final api = widget.api;
     final token = widget.token;
     final session = widget.session;
@@ -1649,12 +1636,6 @@ class _SessionDetailPageState extends State<SessionDetailPage>
                       ),
                   ],
                 );
-                WidgetsBinding.instance.addPostFrameCallback((_) {
-                  if (!mounted) {
-                    return;
-                  }
-                  _restoreScrollOffsetFromCache();
-                });
               }
             }
 
@@ -2781,36 +2762,10 @@ class _TimelineItemCard extends StatelessWidget {
           diffs: diffs,
           status: status,
         ),
-      ActivitySummaryItem(:final groups) => Semantics(
-        container: true,
-        explicitChildNodes: true,
-        label: 'Activity summary',
-        child: Card(
-          child: Padding(
-            padding: const EdgeInsets.all(18),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Text(
-                      'Activity',
-                      style: Theme.of(context).textTheme.titleLarge,
-                    ),
-                    if (_activitySummaryHasStartedGroup(groups)) ...[
-                      const SizedBox(width: 8),
-                      const _ActivitySummaryActiveIndicator(),
-                    ],
-                  ],
-                ),
-                const SizedBox(height: 10),
-                for (final group in groups) ...[
-                  _ActivitySummaryGroupRow(group: group),
-                ],
-              ],
-            ),
-          ),
-        ),
+      ActivitySummaryItem(:final groups) => _CompactActivitySummaryCard(
+        groups: groups,
+        expanded: expandedItemKeys.contains(itemKey),
+        onToggleExpanded: () => onToggleExpanded(itemKey),
       ),
       AttachedSessionItem(:final runtimeSessionId) =>
         _CollapsibleAttachedRuntimeCard(
@@ -2826,26 +2781,8 @@ class _TimelineItemCard extends StatelessWidget {
                 ),
           onToggleExpanded: () => onToggleExpanded(itemKey),
         ),
-      StatusSummaryItem(:final status) => Semantics(
-        container: true,
-        explicitChildNodes: true,
-        label: _sessionStatusLabel(status),
-        child: Container(
-          width: double.infinity,
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-          decoration: BoxDecoration(
-            color: const Color(0x1417232D),
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: const Color(0x3329404D)),
-          ),
-          child: Row(
-            children: [
-              const Icon(Icons.info_outline, size: 18),
-              const SizedBox(width: 8),
-              Expanded(child: Text(_sessionStatusLabel(status))),
-            ],
-          ),
-        ),
+      StatusSummaryItem(:final status) => _CompactStatusSummaryCard(
+        status: status,
       ),
       UnknownEventItem(:final eventType, :final details) =>
         _CollapsibleUnknownEventCard(
@@ -2904,6 +2841,108 @@ class _CollapsibleUnknownEventCard extends StatelessWidget {
                 if (expanded) ...[const SizedBox(height: 10), Text(details)],
               ],
             ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CompactActivitySummaryCard extends StatelessWidget {
+  const _CompactActivitySummaryCard({
+    required this.groups,
+    required this.expanded,
+    required this.onToggleExpanded,
+  });
+
+  final List<ActivitySummaryGroup> groups;
+  final bool expanded;
+  final VoidCallback onToggleExpanded;
+
+  @override
+  Widget build(BuildContext context) {
+    final hasStarted = _activitySummaryHasStartedGroup(groups);
+    final summary = _activitySummarySummary(groups);
+    final tone = hasStarted
+        ? _CompactTimelineTone.inProgress
+        : _CompactTimelineTone.neutral;
+    return Semantics(
+      container: true,
+      explicitChildNodes: true,
+      label: 'Activity summary',
+      child: Card(
+        child: InkWell(
+          onTap: onToggleExpanded,
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _CompactTimelineHeader(
+                  icon: Icons.bolt_outlined,
+                  summary: summary,
+                  tone: tone,
+                  expanded: expanded,
+                ),
+                if (expanded) ...[
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Text(
+                        'Activity',
+                        style: Theme.of(context).textTheme.titleLarge,
+                      ),
+                      if (hasStarted) ...[
+                        const SizedBox(width: 8),
+                        const _ActivitySummaryActiveIndicator(),
+                      ],
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  for (final group in groups) ...[
+                    _ActivitySummaryGroupRow(group: group),
+                  ],
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+String _activitySummarySummary(List<ActivitySummaryGroup> groups) {
+  if (groups.isEmpty) {
+    return 'Activity';
+  }
+  final total = groups.fold<int>(0, (sum, group) => sum + group.count);
+  final first = groups.first;
+  final prefix = total == 1 ? '1 event' : '$total events';
+  return '$prefix · ${first.itemType} ${first.status}';
+}
+
+class _CompactStatusSummaryCard extends StatelessWidget {
+  const _CompactStatusSummaryCard({required this.status});
+
+  final String status;
+
+  @override
+  Widget build(BuildContext context) {
+    final tone = _compactTimelineToneForStatus(status);
+    return Semantics(
+      container: true,
+      explicitChildNodes: true,
+      label: _sessionStatusLabel(status),
+      child: Card(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: _CompactTimelineHeader(
+            icon: Icons.info_outline,
+            summary: _sessionStatusLabel(status),
+            tone: tone,
+            expanded: false,
+            showExpandIcon: false,
           ),
         ),
       ),
@@ -3295,31 +3334,24 @@ class _AssistantMessageCard extends StatelessWidget {
       container: true,
       explicitChildNodes: true,
       label: 'Assistant message',
-      child: Card(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 2),
         child: InkWell(
           onLongPress: () {
             unawaited(_showActions(context));
           },
-          child: Padding(
-            padding: const EdgeInsets.all(18),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Assistant',
-                  style: Theme.of(context).textTheme.titleLarge,
-                ),
-                const SizedBox(height: 10),
-                _AssistantMarkdownView(
-                  markdown: text,
-                  openExternalLink: openExternalLink,
-                ),
-                if (showTypingIndicator) ...[
-                  const SizedBox(height: 12),
-                  const _AssistantTypingIndicator(),
-                ],
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _AssistantMarkdownView(
+                markdown: text,
+                openExternalLink: openExternalLink,
+              ),
+              if (showTypingIndicator) ...[
+                const SizedBox(height: 12),
+                const _AssistantTypingIndicator(),
               ],
-            ),
+            ],
           ),
         ),
       ),
@@ -4435,6 +4467,11 @@ class _CollapsibleToolCallCardState extends State<_CollapsibleToolCallCard> {
     final outputText =
         widget.output ??
         (widget.status == 'inProgress' ? 'Waiting for output...' : 'No output');
+    final summary = _toolSummaryText(widget.label, widget.output, widget.status);
+    final tone = _compactTimelineToneForStatus(
+      widget.status,
+      exitCode: widget.exitCode,
+    );
     return Semantics(
       container: true,
       explicitChildNodes: true,
@@ -4446,36 +4483,43 @@ class _CollapsibleToolCallCardState extends State<_CollapsibleToolCallCard> {
             unawaited(_showActions());
           },
           child: Padding(
-            padding: const EdgeInsets.all(18),
+            padding: const EdgeInsets.all(16),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  children: [
-                    _ToolStatusIndicator(
-                      isInProgress: isInProgress,
-                      status: widget.status,
-                      exitCode: widget.exitCode,
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      widget.toolName,
-                      style: Theme.of(context).textTheme.titleLarge,
+                _CompactTimelineHeader(
+                  icon: _toolStatusIcon(widget.status, widget.exitCode),
+                  summary: summary,
+                  tone: tone,
+                  expanded: widget.expanded,
+                ),
+                if (widget.expanded) ...[
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      _ToolStatusIndicator(
+                        isInProgress: isInProgress,
+                        status: widget.status,
+                        exitCode: widget.exitCode,
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        widget.toolName,
+                        style: Theme.of(context).textTheme.titleLarge,
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Text(widget.label),
+                  if (widget.status != null) ...[
+                    const SizedBox(height: 8),
+                    _StatusPill(
+                      label: widget.status!,
+                      tone: _toolStatusPillTone(widget.status, widget.exitCode),
+                      pulse: isInProgress,
+                      pulseKeySuffix: 'tool.call.started',
                     ),
                   ],
-                ),
-                const SizedBox(height: 8),
-                Text(widget.label),
-                if (widget.status != null) ...[
-                  const SizedBox(height: 8),
-                  _StatusPill(
-                    label: widget.status!,
-                    tone: _toolStatusPillTone(widget.status, widget.exitCode),
-                    pulse: isInProgress,
-                    pulseKeySuffix: 'tool.call.started',
-                  ),
-                ],
-                if (widget.expanded) ...[
                   if (widget.cwd != null) ...[
                     const SizedBox(height: 10),
                     Text(widget.cwd!),
@@ -4863,6 +4907,180 @@ Color _sessionStatusDotColor(String status) {
   };
 }
 
+enum _CompactTimelineTone { success, inProgress, failure, neutral }
+
+_CompactTimelineTone _compactTimelineToneForStatus(
+  String? status, {
+  int? exitCode,
+}) {
+  if (exitCode != null && exitCode != 0) {
+    return _CompactTimelineTone.failure;
+  }
+  return switch (status) {
+    'started' || 'inProgress' => _CompactTimelineTone.inProgress,
+    'failed' || 'cancelled' => _CompactTimelineTone.failure,
+    'completed' => _CompactTimelineTone.success,
+    _ => _CompactTimelineTone.neutral,
+  };
+}
+
+String _compactTimelineToneKey(_CompactTimelineTone tone) {
+  return switch (tone) {
+    _CompactTimelineTone.success => 'success',
+    _CompactTimelineTone.inProgress => 'inProgress',
+    _CompactTimelineTone.failure => 'failure',
+    _CompactTimelineTone.neutral => 'neutral',
+  };
+}
+
+Color _compactTimelineToneColor(_CompactTimelineTone tone) {
+  return switch (tone) {
+    _CompactTimelineTone.success ||
+    _CompactTimelineTone.inProgress => const Color(0xFF43D17A),
+    _CompactTimelineTone.failure => const Color(0xFFE07A7A),
+    _CompactTimelineTone.neutral => const Color(0xFF9FB3C8),
+  };
+}
+
+class _CompactTimelineStatusDot extends StatefulWidget {
+  const _CompactTimelineStatusDot({
+    required this.tone,
+    this.pulse = false,
+  });
+
+  final _CompactTimelineTone tone;
+  final bool pulse;
+
+  @override
+  State<_CompactTimelineStatusDot> createState() =>
+      _CompactTimelineStatusDotState();
+}
+
+class _CompactTimelineStatusDotState extends State<_CompactTimelineStatusDot> {
+  static const _pulseInterval = Duration(milliseconds: 650);
+
+  Timer? _pulseTimer;
+  var _pulseVisible = true;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _syncPulseTimer();
+  }
+
+  @override
+  void didUpdateWidget(covariant _CompactTimelineStatusDot oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.tone != widget.tone || oldWidget.pulse != widget.pulse) {
+      _syncPulseTimer();
+    }
+  }
+
+  @override
+  void dispose() {
+    _pulseTimer?.cancel();
+    super.dispose();
+  }
+
+  void _syncPulseTimer() {
+    final disableAnimations = MediaQuery.disableAnimationsOf(context);
+    if (disableAnimations || !widget.pulse) {
+      _pulseTimer?.cancel();
+      _pulseTimer = null;
+      _pulseVisible = true;
+      return;
+    }
+    _pulseTimer ??= Timer.periodic(_pulseInterval, (_) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _pulseVisible = !_pulseVisible;
+      });
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    _syncPulseTimer();
+    final toneKey = _compactTimelineToneKey(widget.tone);
+    return Opacity(
+      key: ValueKey('compact-timeline-status-dot-$toneKey'),
+      opacity: _pulseVisible ? 1 : 0.24,
+      child: Container(
+        width: 8,
+        height: 8,
+        decoration: BoxDecoration(
+          color: _compactTimelineToneColor(widget.tone),
+          shape: BoxShape.circle,
+        ),
+      ),
+    );
+  }
+}
+
+class _CompactTimelineHeader extends StatelessWidget {
+  const _CompactTimelineHeader({
+    required this.icon,
+    required this.summary,
+    required this.tone,
+    required this.expanded,
+    this.showExpandIcon = true,
+  });
+
+  final IconData icon;
+  final String summary;
+  final _CompactTimelineTone tone;
+  final bool expanded;
+  final bool showExpandIcon;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        DecoratedBox(
+          decoration: BoxDecoration(
+            color: const Color(0xFF17232D),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: SizedBox(
+            width: 28,
+            height: 28,
+            child: Icon(icon, size: 16, color: const Color(0xFFF8FAFC)),
+          ),
+        ),
+        const SizedBox(width: 10),
+        _CompactTimelineStatusDot(
+          tone: tone,
+          pulse: tone == _CompactTimelineTone.inProgress,
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(
+            summary,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(context).textTheme.bodyLarge,
+          ),
+        ),
+        if (showExpandIcon) ...[
+          const SizedBox(width: 6),
+          Icon(
+            expanded ? Icons.expand_less_rounded : Icons.expand_more_rounded,
+            size: 18,
+            color: const Color(0xFF9FB3C8),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+String _toolSummaryText(String label, String? output, String? status) {
+  final command = label.trim().isEmpty ? 'shell' : label.trim();
+  return command;
+}
+
 class _CollapsibleFileChangeCard extends StatefulWidget {
   const _CollapsibleFileChangeCard({
     required this.expanded,
@@ -4951,6 +5169,7 @@ class _CollapsibleFileChangeCardState
   @override
   Widget build(BuildContext context) {
     final accentStatus = widget.status;
+    final tone = _compactTimelineToneForStatus(widget.status);
     return Semantics(
       container: true,
       explicitChildNodes: true,
@@ -4971,37 +5190,44 @@ class _CollapsibleFileChangeCardState
                   child: _FileChangeAccent(status: accentStatus),
                 ),
               Padding(
-                padding: const EdgeInsets.all(18),
+                padding: const EdgeInsets.all(16),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Row(
-                      children: [
-                        Text(
-                          'Files changed',
-                          style: Theme.of(context).textTheme.titleLarge,
-                        ),
-                        if (_showCompletionIcon) ...[
-                          const SizedBox(width: 8),
-                          const Icon(
-                            Icons.check_circle_outline,
-                            key: ValueKey('file-change-completion-icon'),
-                            size: 18,
-                            color: Color(0xFF43D17A),
-                          ),
-                        ],
-                      ],
+                    _CompactTimelineHeader(
+                      icon: Icons.description_outlined,
+                      summary: _fileChangeSummaryLabel(widget.files),
+                      tone: tone,
+                      expanded: widget.expanded,
                     ),
-                    const SizedBox(height: 8),
-                    _FileChangeCountText(files: widget.files),
-                    if (widget.status != null) ...[
-                      const SizedBox(height: 8),
-                      _StatusPill(
-                        label: widget.status!,
-                        tone: _statusPillToneForStatus(widget.status),
-                      ),
-                    ],
                     if (widget.expanded) ...[
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          Text(
+                            'Files changed',
+                            style: Theme.of(context).textTheme.titleLarge,
+                          ),
+                          if (_showCompletionIcon) ...[
+                            const SizedBox(width: 8),
+                            const Icon(
+                              Icons.check_circle_outline,
+                              key: ValueKey('file-change-completion-icon'),
+                              size: 18,
+                              color: Color(0xFF43D17A),
+                            ),
+                          ],
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      _FileChangeCountText(files: widget.files),
+                      if (widget.status != null) ...[
+                        const SizedBox(height: 8),
+                        _StatusPill(
+                          label: widget.status!,
+                          tone: _statusPillToneForStatus(widget.status),
+                        ),
+                      ],
                       for (
                         var index = 0;
                         index < widget.files.length;
@@ -5051,6 +5277,17 @@ class _CollapsibleFileChangeCardState
       ),
     );
   }
+}
+
+String _fileChangeSummaryLabel(List<String> files) {
+  final countLabel = _fileChangeCountLabel(files);
+  if (files.isEmpty) {
+    return 'Files changed';
+  }
+  if (files.length == 1) {
+    return '1 file · ${files.first}';
+  }
+  return '$countLabel · ${files.first}';
 }
 
 class _FileChangeCountText extends StatelessWidget {
