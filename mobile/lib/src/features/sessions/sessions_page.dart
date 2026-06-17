@@ -2260,9 +2260,11 @@ class _AttachSessionDialogState extends State<_AttachSessionDialog> {
   final TextEditingController _runtimeSessionIdController =
       TextEditingController();
   late WorkspaceRoot _selectedRoot;
+  List<ResumeCandidate> _resumeCandidates = const <ResumeCandidate>[];
   bool _isEditingPath = false;
   bool _isAttaching = false;
   bool _isBrowsingPath = false;
+  bool _isLoadingResumeCandidates = false;
   String? _errorText;
   String _agentKind = 'claude';
 
@@ -2356,12 +2358,65 @@ class _AttachSessionDialogState extends State<_AttachSessionDialog> {
       }
       setState(() {
         _pathController.text = selectedPath;
+        _resumeCandidates = const <ResumeCandidate>[];
         _errorText = null;
       });
     } finally {
       if (mounted) {
         setState(() {
           _isBrowsingPath = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _loadResumeCandidates() async {
+    final path = _pathController.text.trim();
+    if (path.isEmpty) {
+      setState(() {
+        _resumeCandidates = const <ResumeCandidate>[];
+        _errorText = 'Path is required';
+      });
+      return;
+    }
+
+    setState(() {
+      _isLoadingResumeCandidates = true;
+      _resumeCandidates = const <ResumeCandidate>[];
+      _errorText = null;
+    });
+    try {
+      final candidates = await widget.api.listResumeCandidates(
+        token: widget.token,
+        rootId: _selectedRoot.id,
+        agentKind: _agentKind,
+        path: path,
+      );
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _resumeCandidates = candidates;
+      });
+    } on Object catch (error) {
+      if (error is DaemonApiException && error.statusCode == 401) {
+        Navigator.of(context).pop();
+        await widget.onSessionExpired();
+        return;
+      }
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _errorText = _userFacingSheetErrorText(
+          error,
+          fallbackText: 'Could not load resume candidates',
+        );
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoadingResumeCandidates = false;
         });
       }
     }
@@ -2413,6 +2468,7 @@ class _AttachSessionDialogState extends State<_AttachSessionDialog> {
                                   (root) => root.id == value,
                                 );
                                 _pathController.text = _selectedRoot.path;
+                                _resumeCandidates = const <ResumeCandidate>[];
                                 _isEditingPath = false;
                                 _errorText = null;
                               });
@@ -2431,6 +2487,8 @@ class _AttachSessionDialogState extends State<_AttachSessionDialog> {
                         : (agentKind) {
                             setState(() {
                               _agentKind = agentKind;
+                              _resumeCandidates = const <ResumeCandidate>[];
+                              _errorText = null;
                             });
                           },
                     keyPrefix: 'attach-session-agent',
@@ -2530,6 +2588,81 @@ class _AttachSessionDialogState extends State<_AttachSessionDialog> {
                       ],
                     ),
                   ),
+                  const SizedBox(height: 12),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton(
+                      onPressed: _isAttaching || _isLoadingResumeCandidates
+                          ? null
+                          : _loadResumeCandidates,
+                      child: Text(
+                        _isLoadingResumeCandidates
+                            ? 'Loading resume sessions...'
+                            : 'Load resume sessions',
+                      ),
+                    ),
+                  ),
+                  if (_resumeCandidates.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      'Resume sessions from $_agentKind',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                    const SizedBox(height: 8),
+                    Column(
+                      children: [
+                        for (
+                          var index = 0;
+                          index < _resumeCandidates.length;
+                          index++
+                        ) ...[
+                          if (index > 0) const SizedBox(height: 8),
+                          Builder(
+                            builder: (context) {
+                              final candidate = _resumeCandidates[index];
+                              final title =
+                                  candidate.title ?? candidate.workspacePath;
+                              return OutlinedButton(
+                                onPressed: _isAttaching
+                                    ? null
+                                    : () {
+                                        final matchingRoot =
+                                            _matchingRootForWorkspacePath(
+                                              candidate.workspacePath,
+                                              widget.roots,
+                                            );
+                                        setState(() {
+                                          if (matchingRoot != null) {
+                                            _selectedRoot = matchingRoot;
+                                          }
+                                          _pathController.text =
+                                              candidate.workspacePath;
+                                          _runtimeSessionIdController.text =
+                                              candidate.runtimeSessionId;
+                                          _isEditingPath = false;
+                                          _agentKind = candidate.agentKind;
+                                          _errorText = null;
+                                        });
+                                      },
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(title),
+                                    Text(
+                                      candidate.runtimeSessionId,
+                                      style: Theme.of(
+                                        context,
+                                      ).textTheme.bodySmall,
+                                    ),
+                                  ],
+                                ),
+                              );
+                            },
+                          ),
+                        ],
+                      ],
+                    ),
+                  ],
                   const SizedBox(height: 12),
                   TextField(
                     controller: _runtimeSessionIdController,

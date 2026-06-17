@@ -366,6 +366,61 @@ void main() {
       );
     });
 
+    test('loads resume candidates with bearer auth', () async {
+      final transport = RecordingTransport(
+        responses: [
+          TransportResponse(
+            statusCode: 200,
+            body: jsonEncode({
+              'candidates': [
+                {
+                  'runtimeSessionId': 'thread-abc',
+                  'title': 'Resume target',
+                  'agentKind': 'codex',
+                  'workspacePath': '/home/jhz/projects/agent-dock',
+                  'updatedAt': '2026-06-17T01:02:03Z',
+                  'status': 'idle',
+                },
+              ],
+            }),
+          ),
+        ],
+      );
+      final client = DaemonClient(
+        baseUrl: Uri.parse('https://daemon.example.com'),
+        transport: transport,
+      );
+
+      final candidates = await client.listResumeCandidates(
+        token: 'tok_workspace',
+        rootId: 'workspace',
+        agentKind: 'codex',
+        path: '/home/jhz/projects/agent-dock',
+      );
+
+      expect(candidates, hasLength(1));
+      expect(candidates.single.runtimeSessionId, 'thread-abc');
+      expect(candidates.single.title, 'Resume target');
+      expect(candidates.single.agentKind, 'codex');
+      expect(candidates.single.workspacePath, '/home/jhz/projects/agent-dock');
+      expect(candidates.single.updatedAt, '2026-06-17T01:02:03Z');
+      expect(candidates.single.status, 'idle');
+      expect(transport.requests.single.method, 'GET');
+      expect(
+        transport.requests.single.url.path,
+        '/api/sessions/resume-candidates',
+      );
+      expect(transport.requests.single.url.queryParameters, {
+        'rootId': 'workspace',
+        'agentKind': 'codex',
+        'path': '/home/jhz/projects/agent-dock',
+      });
+      expect(
+        transport.requests.single.headers['authorization'],
+        'Bearer tok_workspace',
+      );
+    });
+
     test('sends a session message with bearer auth', () async {
       final transport = RecordingTransport(
         responses: [

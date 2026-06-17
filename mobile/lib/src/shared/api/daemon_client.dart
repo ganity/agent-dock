@@ -70,6 +70,13 @@ abstract class DaemonApi {
     required String token,
     required String path,
   });
+
+  Future<List<ResumeCandidate>> listResumeCandidates({
+    required String token,
+    required String rootId,
+    required String agentKind,
+    required String path,
+  });
 }
 
 abstract class DaemonHttpTransport {
@@ -372,6 +379,32 @@ class DaemonClient implements DaemonApi {
     return WorkspaceDirectoryListing.fromJson(json);
   }
 
+  @override
+  Future<List<ResumeCandidate>> listResumeCandidates({
+    required String token,
+    required String rootId,
+    required String agentKind,
+    required String path,
+  }) async {
+    final json = await _sendJson(
+      TransportRequest(
+        method: 'GET',
+        url: _url('/api/sessions/resume-candidates').replace(
+          queryParameters: {
+            'rootId': rootId,
+            'agentKind': agentKind,
+            'path': path,
+          },
+        ),
+        headers: {'authorization': 'Bearer $token'},
+      ),
+    );
+
+    return _objects(
+      json['candidates'],
+    ).map(ResumeCandidate.fromJson).toList();
+  }
+
   Uri _url(String path) {
     return baseUrl.replace(path: path, query: null, queryParameters: null);
   }
@@ -579,6 +612,35 @@ class WorkspaceDirectoryListing {
   final String currentPath;
   final String? parentPath;
   final List<WorkspaceDirectoryEntry> directories;
+}
+
+class ResumeCandidate {
+  const ResumeCandidate({
+    required this.runtimeSessionId,
+    required this.title,
+    required this.agentKind,
+    required this.workspacePath,
+    required this.updatedAt,
+    required this.status,
+  });
+
+  factory ResumeCandidate.fromJson(Map<String, Object?> json) {
+    return ResumeCandidate(
+      runtimeSessionId: json['runtimeSessionId'] as String,
+      title: json['title'] as String?,
+      agentKind: json['agentKind'] as String,
+      workspacePath: json['workspacePath'] as String,
+      updatedAt: json['updatedAt'] as String?,
+      status: json['status'] as String?,
+    );
+  }
+
+  final String runtimeSessionId;
+  final String? title;
+  final String agentKind;
+  final String workspacePath;
+  final String? updatedAt;
+  final String? status;
 }
 
 class SessionSummary {

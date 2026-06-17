@@ -15774,6 +15774,142 @@ void main() {
   });
 
   testWidgets(
+    'attach sheet loads real resume candidates and lets the user pick one',
+    (tester) async {
+      final api = FakeDaemonApi(
+        bootstrap: const MobileBootstrap(
+          daemonVersion: '0.1.0',
+          user: CurrentUser(id: 'usr_workspace', displayName: 'Workspace'),
+          roots: [
+            WorkspaceRoot(
+              id: 'workspace',
+              label: 'Workspace',
+              path: '/home/jhz/projects',
+            ),
+          ],
+          sessions: <SessionSummary>[],
+          voice: VoiceConfig(doubaoDirectAvailable: false),
+        ),
+        attachResult: const SessionSnapshot(
+          id: 'sess_attached',
+          title: 'Resume target',
+          agentKind: 'codex',
+          sourceKind: 'attached',
+          runtimeSessionId: 'thread-xyz',
+          workspacePath: '/home/jhz/projects/agent-dock',
+          status: 'attached',
+          hasMoreHistory: false,
+          events: <SessionEvent>[],
+        ),
+        resumeCandidates: const [
+          ResumeCandidate(
+            runtimeSessionId: 'thread-xyz',
+            title: 'Resume target',
+            agentKind: 'codex',
+            workspacePath: '/home/jhz/projects/agent-dock',
+            updatedAt: '2026-06-17T01:02:03Z',
+            status: 'idle',
+          ),
+        ],
+      );
+      await pumpApp(tester, api: api);
+
+      await tester.enterText(find.byType(TextField).at(0), 'workspace');
+      await tester.enterText(find.byType(TextField).at(1), '1234');
+      await tester.tap(find.text('Sign in'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Attach'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('attach-session-agent-codex')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Edit path'));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.widgetWithText(TextField, 'Path'),
+        '/home/jhz/projects/agent-dock',
+      );
+      await tester.tap(find.text('Load resume sessions'));
+      await tester.pumpAndSettle();
+
+      expect(api.resumeCandidateRequests, [
+        'workspace:codex:/home/jhz/projects/agent-dock',
+      ]);
+      final resumeCandidateButton = find.widgetWithText(
+        OutlinedButton,
+        'Resume target',
+      );
+      await tester.ensureVisible(resumeCandidateButton);
+      await tester.tap(resumeCandidateButton);
+      await tester.pumpAndSettle();
+
+      expect(
+        find.widgetWithText(TextField, '/home/jhz/projects/agent-dock'),
+        findsOneWidget,
+      );
+      expect(find.widgetWithText(TextField, 'thread-xyz'), findsOneWidget);
+
+      await tester.tap(
+        find
+            .descendant(
+              of: find.byType(BottomSheet),
+              matching: find.text('Attach'),
+            )
+            .last,
+      );
+      await tester.pumpAndSettle();
+
+      expect(api.attachedSessions, [
+        'workspace:/home/jhz/projects/agent-dock:codex:thread-xyz',
+      ]);
+      expect(find.text('Resume target'), findsAtLeastNWidgets(1));
+    },
+  );
+
+  testWidgets(
+    'attach sheet shows a user-facing error when loading resume candidates fails',
+    (tester) async {
+      final api = FakeDaemonApi(
+        bootstrap: const MobileBootstrap(
+          daemonVersion: '0.1.0',
+          user: CurrentUser(id: 'usr_workspace', displayName: 'Workspace'),
+          roots: [
+            WorkspaceRoot(
+              id: 'workspace',
+              label: 'Workspace',
+              path: '/home/jhz/projects',
+            ),
+          ],
+          sessions: <SessionSummary>[],
+          voice: VoiceConfig(doubaoDirectAvailable: false),
+        ),
+        resumeCandidatesError: const DaemonApiException(
+          statusCode: 500,
+          code: 'RESUME_LIST_FAILED',
+          message: 'Could not load resume candidates',
+        ),
+      );
+      await pumpApp(tester, api: api);
+
+      await tester.enterText(find.byType(TextField).at(0), 'workspace');
+      await tester.enterText(find.byType(TextField).at(1), '1234');
+      await tester.tap(find.text('Sign in'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Attach'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Edit path'));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.widgetWithText(TextField, 'Path'),
+        '/home/jhz/projects/agent-dock',
+      );
+      await tester.tap(find.text('Load resume sessions'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Could not load resume candidates'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
     'attach runtime opens as a mobile bottom sheet instead of an alert dialog',
     (tester) async {
       final api = FakeDaemonApi(
@@ -17427,6 +17563,8 @@ class FakeDaemonApi implements DaemonApi {
     this.createError,
     this.attachDelay,
     this.attachError,
+    this.resumeCandidates = const <ResumeCandidate>[],
+    this.resumeCandidatesError,
     SessionSnapshot? createResult,
     SessionSnapshot? attachResult,
     Map<String, WorkspaceDirectoryListing>? directoryListings,
@@ -17546,6 +17684,8 @@ class FakeDaemonApi implements DaemonApi {
   final Object? createError;
   final Duration? attachDelay;
   final Object? attachError;
+  final List<ResumeCandidate> resumeCandidates;
+  final Object? resumeCandidatesError;
   final SessionSnapshot createResult;
   final SessionSnapshot attachResult;
   final Map<String, WorkspaceDirectoryListing> directoryListings;
@@ -17569,6 +17709,7 @@ class FakeDaemonApi implements DaemonApi {
   final List<String> attachedSessions = <String>[];
   final List<String> deletedSessions = <String>[];
   final List<Uri> healthChecks = <Uri>[];
+  final List<String> resumeCandidateRequests = <String>[];
 
   @override
   Future<void> healthCheck() async {
@@ -17769,6 +17910,21 @@ class FakeDaemonApi implements DaemonApi {
       return listing;
     }
     throw StateError('No directory listing stub for $path');
+  }
+
+  @override
+  Future<List<ResumeCandidate>> listResumeCandidates({
+    required String token,
+    required String rootId,
+    required String agentKind,
+    required String path,
+  }) async {
+    resumeCandidateRequests.add('$rootId:$agentKind:$path');
+    final error = resumeCandidatesError;
+    if (error != null) {
+      throw error;
+    }
+    return resumeCandidates;
   }
 
   @override
