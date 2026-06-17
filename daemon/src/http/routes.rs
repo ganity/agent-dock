@@ -12,8 +12,9 @@ use std::collections::HashMap;
 use crate::{
     app::AppState,
     http::dto::{
-        AttachSessionRequest, CreateSessionRequest, CurrentUserDto, LoginRequest, SendMessageRequest,
-        SessionEventDto, SessionSnapshotDto, SessionSummaryDto, WorkspaceDirectoryDto,
+        AdminUserDto, AttachSessionRequest, CreateSessionRequest, CreateUserRequest, CurrentUserDto,
+        LoginRequest, ResetUserPasswordRequest, SendMessageRequest, SessionEventDto,
+        ResumeCandidateDto, SessionSnapshotDto, SessionSummaryDto, WorkspaceDirectoryDto,
         WorkspaceDirectoryListingDto, WorkspaceRootDto,
     },
     http::ws::{stream_session_events, stream_voice_input},
@@ -26,11 +27,16 @@ pub fn routes() -> Router<AppState> {
         .route("/api/auth/login", post(login))
         .route("/api/auth/session", get(auth_session))
         .route("/api/mobile/bootstrap", get(mobile_bootstrap))
+        .route("/api/admin/users", get(list_users).post(create_user))
+        .route("/api/admin/users/{id}/password", post(reset_user_password))
+        .route("/api/admin/users/{id}", axum::routing::delete(delete_user))
         .route("/api/workspaces/roots", get(workspace_roots))
         .route("/api/workspaces/directories", get(workspace_directories))
         .route("/api/sessions", post(create_session).get(list_sessions))
+        .route("/api/sessions/resume-candidates", get(list_resume_candidates))
         .route("/api/sessions/attach", post(attach_session))
         .route("/api/sessions/{id}", get(get_session).delete(delete_session))
+        .route("/api/sessions/{id}/resume", post(resume_session))
         .route("/api/sessions/{id}/attachments/{name}", get(get_session_attachment))
         .route("/api/sessions/{id}/attachments", post(upload_session_attachment))
         .route("/api/sessions/{id}/messages", post(send_session_message))
@@ -85,9 +91,8 @@ async fn login(
     State(state): State<AppState>,
     Json(request): Json<LoginRequest>,
 ) -> impl IntoResponse {
-    let token = match (&request.username, &request.password, &request.pin) {
-        (Some(username), Some(password), _) => state.auth.login_user(username, password),
-        (_, _, Some(pin)) => state.auth.login(pin),
+    let token = match (&request.username, &request.password) {
+        (Some(username), Some(password)) => state.auth.login_user(username, password).await,
         _ => None,
     };
 
@@ -185,6 +190,145 @@ async fn workspace_roots(
     let roots = workspace_root_dtos(&state);
 
     (StatusCode::OK, Json(json!({ "roots": roots }))).into_response()
+}
+
+async fn list_users(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let Some(user) = current_user_from_headers(&state, &headers) else {
+        return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "UNAUTHORIZED" }))).into_response();
+    };
+    if !user.is_admin {
+        return (StatusCode::FORBIDDEN, Json(json!({ "error": "FORBIDDEN" }))).into_response();
+    }
+
+    match state.auth.list_users().await {
+        Ok(users) => (
+            StatusCode::OK,
+            Json(json!({
+                "users": users.into_iter().map(admin_user_to_dto).collect::<Vec<_>>(),
+            })),
+        )
+            .into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": error.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn create_user(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<CreateUserRequest>,
+) -> impl IntoResponse {
+    let Some(user) = current_user_from_headers(&state, &headers) else {
+        return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "UNAUTHORIZED" }))).into_response();
+    };
+    if !user.is_admin {
+        return (StatusCode::FORBIDDEN, Json(json!({ "error": "FORBIDDEN" }))).into_response();
+    }
+
+    let username = request.username.trim();
+    let password = request.password.trim();
+    if username.is_empty() || password.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "INVALID_INPUT" })),
+        )
+            .into_response();
+    }
+
+    match state
+        .auth
+        .create_user(username, password, request.is_admin)
+        .await
+    {
+        Ok(created) => (
+            StatusCode::CREATED,
+            Json(json!({ "user": admin_user_to_dto(created) })),
+        )
+            .into_response(),
+        Err(crate::auth::CreateUserError::UsernameTaken) => (
+            StatusCode::CONFLICT,
+            Json(json!({ "error": "USERNAME_TAKEN" })),
+        )
+            .into_response(),
+        Err(crate::auth::CreateUserError::InvalidInput) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "INVALID_INPUT" })),
+        )
+            .into_response(),
+        Err(crate::auth::CreateUserError::Unexpected(error)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": error.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn reset_user_password(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(user_id): Path<String>,
+    Json(request): Json<ResetUserPasswordRequest>,
+) -> impl IntoResponse {
+    let Some(user) = current_user_from_headers(&state, &headers) else {
+        return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "UNAUTHORIZED" }))).into_response();
+    };
+    if !user.is_admin {
+        return (StatusCode::FORBIDDEN, Json(json!({ "error": "FORBIDDEN" }))).into_response();
+    }
+
+    if request.password.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "INVALID_INPUT" })),
+        )
+            .into_response();
+    }
+
+    match state.auth.reset_password(&user_id, request.password.trim()).await {
+        Ok(true) => (StatusCode::OK, Json(json!({ "ok": true }))).into_response(),
+        Ok(false) => (StatusCode::NOT_FOUND, Json(json!({ "error": "NOT_FOUND" }))).into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": error.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn delete_user(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(user_id): Path<String>,
+) -> impl IntoResponse {
+    let Some(user) = current_user_from_headers(&state, &headers) else {
+        return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "UNAUTHORIZED" }))).into_response();
+    };
+    if !user.is_admin {
+        return (StatusCode::FORBIDDEN, Json(json!({ "error": "FORBIDDEN" }))).into_response();
+    }
+
+    match state.auth.delete_user(&user_id).await {
+        Ok(crate::auth::DeleteUserResult::Deleted) => StatusCode::NO_CONTENT.into_response(),
+        Ok(crate::auth::DeleteUserResult::NotFound) => {
+            (StatusCode::NOT_FOUND, Json(json!({ "error": "NOT_FOUND" }))).into_response()
+        }
+        Ok(crate::auth::DeleteUserResult::LastAdmin) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "LAST_ADMIN_REQUIRED" })),
+        )
+            .into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": error.to_string() })),
+        )
+            .into_response(),
+    }
 }
 
 async fn workspace_directories(
@@ -310,6 +454,76 @@ async fn list_sessions(
     (StatusCode::OK, Json(json!({ "sessions": response }))).into_response()
 }
 
+async fn list_resume_candidates(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let Some(_user) = current_user_from_headers(&state, &headers) else {
+        return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "UNAUTHORIZED" }))).into_response();
+    };
+
+    let Some(root_id) = query.get("rootId").map(String::as_str) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "rootId query parameter is required" })),
+        )
+            .into_response();
+    };
+    let Some(agent_kind) = query.get("agentKind").map(String::as_str) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "agentKind query parameter is required" })),
+        )
+            .into_response();
+    };
+    let Some(path) = query.get("path").map(String::as_str) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "path query parameter is required" })),
+        )
+            .into_response();
+    };
+
+    let Some(root) = state.config.roots.iter().find(|root| root.id == root_id) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "UNKNOWN_ROOT" })),
+        )
+            .into_response();
+    };
+
+    let workspace_path = normalize_workspace_path(&root.path, path);
+    let candidates = match state
+        .sessions
+        .list_resume_candidates(agent_kind, &workspace_path)
+        .await
+    {
+        Ok(value) => value,
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": error.to_string() })),
+            )
+                .into_response();
+        }
+    };
+
+    let response = candidates
+        .into_iter()
+        .map(|candidate| ResumeCandidateDto {
+            runtime_session_id: candidate.runtime_session_id,
+            title: candidate.title,
+            agent_kind: candidate.agent_kind,
+            workspace_path: candidate.workspace_path,
+            updated_at: candidate.updated_at,
+            status: candidate.status,
+        })
+        .collect::<Vec<_>>();
+
+    (StatusCode::OK, Json(json!({ "candidates": response }))).into_response()
+}
+
 async fn attach_session(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -404,6 +618,29 @@ async fn delete_session(
     match state.sessions.delete_session(&session_id).await {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
         Ok(false) => StatusCode::NOT_FOUND.into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": error.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn resume_session(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(session_id): Path<String>,
+) -> impl IntoResponse {
+    let Some(user) = current_user_from_headers(&state, &headers) else {
+        return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "UNAUTHORIZED" }))).into_response();
+    };
+
+    if let Err(response) = ensure_session_access(&state, &session_id, &user.id).await {
+        return response;
+    }
+
+    match state.sessions.resume_session(&session_id).await {
+        Ok(snapshot) => (StatusCode::OK, Json(snapshot_to_dto(snapshot))).into_response(),
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": error.to_string() })),
@@ -561,6 +798,22 @@ fn current_user_to_dto(user: crate::auth::CurrentUser) -> CurrentUserDto {
     CurrentUserDto {
         id: user.id,
         display_name: user.display_name,
+        is_admin: user.is_admin,
+    }
+}
+
+fn admin_user_to_dto(user: crate::user::store::StoredUser) -> AdminUserDto {
+    AdminUserDto {
+        id: user.id,
+        username: user.username.clone(),
+        display_name: {
+            let mut chars = user.username.chars();
+            match chars.next() {
+                Some(first) => format!("{}{}", first.to_uppercase(), chars.as_str()),
+                None => "User".into(),
+            }
+        },
+        is_admin: user.is_admin,
     }
 }
 
@@ -601,4 +854,16 @@ fn content_type_for_attachment_name(name: &str) -> &'static str {
     } else {
         "application/octet-stream"
     }
+}
+
+fn normalize_workspace_path(root_path: &str, path: &str) -> String {
+    let candidate = std::path::Path::new(path);
+    if candidate.is_absolute() {
+        return candidate.to_string_lossy().into_owned();
+    }
+
+    std::path::Path::new(root_path)
+        .join(candidate)
+        .to_string_lossy()
+        .into_owned()
 }

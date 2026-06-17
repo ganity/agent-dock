@@ -2,7 +2,6 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize)]
 pub struct LoginRequest {
-    pub pin: Option<String>,
     pub username: Option<String>,
     pub password: Option<String>,
 }
@@ -12,6 +11,31 @@ pub struct CurrentUserDto {
     pub id: String,
     #[serde(rename = "displayName")]
     pub display_name: String,
+    #[serde(rename = "isAdmin")]
+    pub is_admin: bool,
+}
+
+#[derive(Serialize)]
+pub struct AdminUserDto {
+    pub id: String,
+    pub username: String,
+    #[serde(rename = "displayName")]
+    pub display_name: String,
+    #[serde(rename = "isAdmin")]
+    pub is_admin: bool,
+}
+
+#[derive(Deserialize)]
+pub struct CreateUserRequest {
+    pub username: String,
+    pub password: String,
+    #[serde(rename = "isAdmin")]
+    pub is_admin: bool,
+}
+
+#[derive(Deserialize)]
+pub struct ResetUserPasswordRequest {
+    pub password: String,
 }
 
 #[derive(Deserialize)]
@@ -103,4 +127,18 @@ pub struct SessionSummaryDto {
     pub status: String,
     #[serde(rename = "workspacePath")]
     pub workspace_path: String,
+}
+
+#[derive(Serialize)]
+pub struct ResumeCandidateDto {
+    #[serde(rename = "runtimeSessionId")]
+    pub runtime_session_id: String,
+    pub title: Option<String>,
+    #[serde(rename = "agentKind")]
+    pub agent_kind: String,
+    #[serde(rename = "workspacePath")]
+    pub workspace_path: String,
+    #[serde(rename = "updatedAt")]
+    pub updated_at: Option<String>,
+    pub status: Option<String>,
 }

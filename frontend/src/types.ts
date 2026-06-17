@@ -8,6 +8,28 @@ export interface SessionSummary {
   workspacePath?: string;
 }
 
+export interface ResumeCandidate {
+  runtimeSessionId: string;
+  title?: string | null;
+  agentKind: string;
+  workspacePath: string;
+  updatedAt?: string | null;
+  status?: string | null;
+}
+
+export interface CurrentUser {
+  id: string;
+  displayName: string;
+  isAdmin?: boolean;
+}
+
+export interface AdminUser {
+  id: string;
+  username: string;
+  displayName: string;
+  isAdmin: boolean;
+}
+
 export interface WorkspaceRoot {
   id: string;
   label: string;

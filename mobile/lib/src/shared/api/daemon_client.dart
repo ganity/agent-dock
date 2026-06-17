@@ -19,6 +19,11 @@ abstract class DaemonApi {
     int? beforeEventId,
   });
 
+  Future<SessionSnapshot> resumeSession({
+    required String sessionId,
+    required String token,
+  });
+
   Stream<SessionEvent> sessionEvents({
     required String sessionId,
     required String token,
@@ -136,7 +141,11 @@ class DaemonClient implements DaemonApi {
   @override
   Future<void> healthCheck() async {
     final json = await _sendJson(
-      TransportRequest(method: 'GET', url: _url('/api/health'), headers: const {}),
+      TransportRequest(
+        method: 'GET',
+        url: _url('/api/health'),
+        headers: const {},
+      ),
     );
     if (json['ok'] != true) {
       throw const FormatException('Daemon responded but is not healthy');
@@ -197,6 +206,22 @@ class DaemonClient implements DaemonApi {
   }
 
   @override
+  Future<SessionSnapshot> resumeSession({
+    required String sessionId,
+    required String token,
+  }) async {
+    final json = await _sendJson(
+      TransportRequest(
+        method: 'POST',
+        url: _url('/api/sessions/$sessionId/resume'),
+        headers: {'authorization': 'Bearer $token'},
+      ),
+    );
+
+    return SessionSnapshot.fromJson(json);
+  }
+
+  @override
   Stream<SessionEvent> sessionEvents({
     required String sessionId,
     required String token,
@@ -205,13 +230,8 @@ class DaemonClient implements DaemonApi {
     return _eventStreamTransport
         .connect(
           EventStreamRequest(
-            url: _webSocketUrl(
-              '/ws/sessions/$sessionId/events',
-            ).replace(
-              queryParameters: {
-                'after': '$afterEventId',
-                'token': token,
-              },
+            url: _webSocketUrl('/ws/sessions/$sessionId/events').replace(
+              queryParameters: {'after': '$afterEventId', 'token': token},
             ),
             headers: {'authorization': 'Bearer $token'},
           ),

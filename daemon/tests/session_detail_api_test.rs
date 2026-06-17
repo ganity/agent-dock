@@ -8,20 +8,7 @@ use agent_dock_daemon::app::build_test_router;
 async fn get_session_detail_returns_snapshot_events() {
     let app = build_test_router().await;
 
-    let login = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/auth/login")
-                .header("content-type", "application/json")
-                .body(Body::from(r#"{"pin":"1234"}"#))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    let cookie = login.headers().get("set-cookie").unwrap().to_str().unwrap().to_string();
+    let cookie = login_for_cookie(&app, "admin").await;
 
     let create = app
         .clone()
@@ -73,20 +60,7 @@ async fn get_session_detail_returns_snapshot_events() {
 async fn get_session_detail_supports_latest_window_and_before_cursor() {
     let app = build_test_router().await;
 
-    let login = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/auth/login")
-                .header("content-type", "application/json")
-                .body(Body::from(r#"{"pin":"1234"}"#))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    let cookie = login.headers().get("set-cookie").unwrap().to_str().unwrap().to_string();
+    let cookie = login_for_cookie(&app, "admin").await;
 
     let create = app
         .clone()
@@ -171,4 +145,30 @@ async fn get_session_detail_supports_latest_window_and_before_cursor() {
     assert!(older_events[1]["id"].as_i64().unwrap() < older_events[2]["id"].as_i64().unwrap());
     assert!(older_events.iter().all(|event| event["id"].as_i64().unwrap() < before));
     assert!(older_events[2]["id"].as_i64().unwrap() < latest_events[0]["id"].as_i64().unwrap());
+}
+
+async fn login_for_cookie(app: &axum::Router, username: &str) -> String {
+    let login = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/auth/login")
+                .header("content-type", "application/json")
+                .body(Body::from(format!(
+                    r#"{{"username":"{username}","password":"1234"}}"#,
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(login.status(), StatusCode::OK);
+    login
+        .headers()
+        .get("set-cookie")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string()
 }

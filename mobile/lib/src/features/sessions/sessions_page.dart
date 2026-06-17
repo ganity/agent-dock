@@ -19,10 +19,7 @@ import '../../shared/voice/voice_input_controller.dart';
 const _sessionsOfflineText = 'Offline. Waiting for network...';
 const _minimumSupportedDaemonVersion = '0.1.0';
 
-String _userFacingSheetErrorText(
-  Object error, {
-  required String fallbackText,
-}) {
+String _userFacingSheetErrorText(Object error, {required String fallbackText}) {
   if (error is SocketException) {
     return _sessionsOfflineText;
   }
@@ -30,6 +27,32 @@ String _userFacingSheetErrorText(
     DaemonApiException(:final message) => message,
     _ => fallbackText,
   };
+}
+
+class _ResolvedOpenSession {
+  const _ResolvedOpenSession({
+    required this.summary,
+    required this.initialSnapshot,
+  });
+
+  final SessionSummary summary;
+  final SessionSnapshot? initialSnapshot;
+}
+
+Future<_ResolvedOpenSession> _resolveSessionForOpen({
+  required DaemonApi api,
+  required String token,
+  required SessionSummary session,
+}) async {
+  if (session.status.toLowerCase() != 'suspended') {
+    return _ResolvedOpenSession(summary: session, initialSnapshot: null);
+  }
+
+  final snapshot = await api.resumeSession(sessionId: session.id, token: token);
+  return _ResolvedOpenSession(
+    summary: snapshot.toSummary(),
+    initialSnapshot: snapshot,
+  );
 }
 
 class SessionsPage extends StatefulWidget {
@@ -406,7 +429,8 @@ class _SessionsPageState extends State<SessionsPage>
                         enteringSessionIds: _enteringSessionIds,
                         onDelete: _deleteSession,
                         onDeleteFromActions: _deleteSessionFromActions,
-                        onDeleteImmediately: _deleteSessionImmediatelyFromDetail,
+                        onDeleteImmediately:
+                            _deleteSessionImmediatelyFromDetail,
                         onRefreshAfterReturn: _refreshSessions,
                         onSelectSession: widget.onSelectSession,
                         onSessionExpired: widget.onSessionExpired,
@@ -1311,8 +1335,15 @@ class _RunningSessionCard extends StatelessWidget {
   final Future<void> Function() onSignOut;
 
   Future<void> _openSession(BuildContext context) async {
-    unawaited(onSelectSession(session.id));
-    await Navigator.of(context).push(
+    final navigator = Navigator.of(context);
+    final resolved = await _resolveSessionForOpen(
+      api: api,
+      token: token,
+      session: session,
+    );
+    final resolvedSession = resolved.summary;
+    unawaited(onSelectSession(resolvedSession.id));
+    await navigator.push(
       MaterialPageRoute<void>(
         builder: (_) => SessionDetailPage(
           api: api,
@@ -1327,13 +1358,14 @@ class _RunningSessionCard extends StatelessWidget {
           sessionDetailCacheStore: sessionDetailCacheStore,
           voice: voice,
           token: token,
-          session: session,
+          session: resolvedSession,
+          initialSnapshot: resolved.initialSnapshot,
           onDeleteSession: onDeleteImmediately,
           onUnauthorized: onSessionExpired,
         ),
       ),
     );
-    if (!context.mounted) {
+    if (!navigator.mounted) {
       return;
     }
     unawaited(onRefreshAfterReturn());
@@ -1466,8 +1498,15 @@ class _SessionRow extends StatelessWidget {
   }
 
   Future<void> _openSession(BuildContext context) async {
-    unawaited(onSelectSession(session.id));
-    await Navigator.of(context).push(
+    final navigator = Navigator.of(context);
+    final resolved = await _resolveSessionForOpen(
+      api: api,
+      token: token,
+      session: session,
+    );
+    final resolvedSession = resolved.summary;
+    unawaited(onSelectSession(resolvedSession.id));
+    await navigator.push(
       MaterialPageRoute<void>(
         builder: (_) => SessionDetailPage(
           api: api,
@@ -1482,13 +1521,14 @@ class _SessionRow extends StatelessWidget {
           sessionDetailCacheStore: sessionDetailCacheStore,
           voice: voice,
           token: token,
-          session: session,
+          session: resolvedSession,
+          initialSnapshot: resolved.initialSnapshot,
           onDeleteSession: onDeleteImmediately,
           onUnauthorized: onSessionExpired,
         ),
       ),
     );
-    if (!context.mounted) {
+    if (!navigator.mounted) {
       return;
     }
     unawaited(onRefreshAfterReturn());
@@ -1502,11 +1542,8 @@ class _SessionRow extends StatelessWidget {
         session: session,
         onOpenDetails: () => _showSessionDetailsSheet(context),
         onOpenSession: () => _openSession(context),
-        onCopyWorkspacePath: () => _copyToClipboard(
-          context,
-          session.workspacePath,
-          'Workspace path',
-        ),
+        onCopyWorkspacePath: () =>
+            _copyToClipboard(context, session.workspacePath, 'Workspace path'),
         onCopyRuntimeSessionId:
             session.runtimeSessionId == null ||
                 session.runtimeSessionId!.isEmpty
@@ -3037,10 +3074,7 @@ class _SessionRowDetailsSheet extends StatelessWidget {
               _SessionRowDetail(label: 'Workspace path', value: workspacePath),
               if (runtimeSessionId case final id?)
                 _SessionRowDetail(label: 'Runtime session ID', value: id),
-              _SessionRowDetail(
-                label: 'Daemon URL host',
-                value: daemonUrlHost,
-              ),
+              _SessionRowDetail(label: 'Daemon URL host', value: daemonUrlHost),
             ],
           ),
         ),

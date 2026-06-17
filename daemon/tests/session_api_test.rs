@@ -8,20 +8,7 @@ use agent_dock_daemon::app::build_test_router;
 async fn create_session_returns_persisted_placeholder_snapshot() {
     let app = build_test_router().await;
 
-    let login = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/auth/login")
-                .header("content-type", "application/json")
-                .body(Body::from(r#"{"pin":"1234"}"#))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    let cookie = login.headers().get("set-cookie").unwrap().to_str().unwrap().to_string();
+    let cookie = login_for_cookie(&app, "admin").await;
 
     let create = app
         .clone()
@@ -51,6 +38,10 @@ async fn create_session_returns_persisted_placeholder_snapshot() {
 #[tokio::test]
 async fn sessions_are_scoped_to_authenticated_user() {
     let app = build_test_router().await;
+
+    let admin_token = login_for_token(&app, "admin").await;
+    create_user(&app, &admin_token, "alice", "1234").await;
+    create_user(&app, &admin_token, "bob", "1234").await;
 
     let alice_token = login_for_token(&app, "alice").await;
     let bob_token = login_for_token(&app, "bob").await;
@@ -161,6 +152,32 @@ async fn login_for_token(app: &axum::Router, username: &str) -> String {
     json["token"].as_str().unwrap().to_string()
 }
 
+async fn login_for_cookie(app: &axum::Router, username: &str) -> String {
+    let login = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/auth/login")
+                .header("content-type", "application/json")
+                .body(Body::from(format!(
+                    r#"{{"username":"{username}","password":"1234"}}"#,
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(login.status(), StatusCode::OK);
+    login
+        .headers()
+        .get("set-cookie")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string()
+}
+
 async fn list_sessions_for_token(app: &axum::Router, token: &str) -> serde_json::Value {
     let list = app
         .clone()
@@ -177,4 +194,29 @@ async fn list_sessions_for_token(app: &axum::Router, token: &str) -> serde_json:
     assert_eq!(list.status(), StatusCode::OK);
     let body = to_bytes(list.into_body(), usize::MAX).await.unwrap();
     serde_json::from_slice(&body).unwrap()
+}
+
+async fn create_user(app: &axum::Router, admin_token: &str, username: &str, password: &str) {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/admin/users")
+                .header("authorization", format!("Bearer {admin_token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "username": username,
+                        "password": password,
+                        "isAdmin": false,
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
 }

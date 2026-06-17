@@ -30,7 +30,9 @@ async fn websocket_stream_replays_events_after_cursor() {
                 .method("POST")
                 .uri("/api/auth/login")
                 .header("content-type", "application/json")
-                .body(Body::from(r#"{"pin":"1234"}"#))
+                .body(Body::from(
+                    r#"{"username":"admin","password":"1234"}"#,
+                ))
                 .unwrap(),
         )
         .await
@@ -132,7 +134,7 @@ async fn websocket_stream_accepts_bearer_token() {
                 .uri("/api/auth/login")
                 .header("content-type", "application/json")
                 .body(Body::from(
-                    r#"{"username":"workspace","password":"1234"}"#,
+                    r#"{"username":"admin","password":"1234"}"#,
                 ))
                 .unwrap(),
         )
@@ -202,7 +204,7 @@ async fn websocket_stream_accepts_query_token_fallback() {
                 .uri("/api/auth/login")
                 .header("content-type", "application/json")
                 .body(Body::from(
-                    r#"{"username":"workspace","password":"1234"}"#,
+                    r#"{"username":"admin","password":"1234"}"#,
                 ))
                 .unwrap(),
         )

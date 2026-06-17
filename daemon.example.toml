@@ -1,4 +1,4 @@
-listen = "127.0.0.1:4123"
+listen = "0.0.0.0:4123"
 pin = "1234"
 database_path = "./daemon-data/agent-dock.sqlite3"
 

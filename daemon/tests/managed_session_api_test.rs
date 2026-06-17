@@ -8,20 +8,7 @@ use agent_dock_daemon::app::build_test_router;
 async fn list_sessions_returns_managed_session_summary() {
     let app = build_test_router().await;
 
-    let login = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/auth/login")
-                .header("content-type", "application/json")
-                .body(Body::from(r#"{"pin":"1234"}"#))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    let cookie = login.headers().get("set-cookie").unwrap().to_str().unwrap().to_string();
+    let cookie = login_for_cookie(&app, "admin").await;
 
     let create = app
         .clone()
@@ -78,4 +65,30 @@ async fn list_sessions_returns_managed_session_summary() {
     let detail_body = to_bytes(detail.into_body(), usize::MAX).await.unwrap();
     let detail_json: serde_json::Value = serde_json::from_slice(&detail_body).unwrap();
     assert_eq!(detail_json["title"].as_str(), Some("Launch Pad"));
+}
+
+async fn login_for_cookie(app: &axum::Router, username: &str) -> String {
+    let login = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/auth/login")
+                .header("content-type", "application/json")
+                .body(Body::from(format!(
+                    r#"{{"username":"{username}","password":"1234"}}"#,
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(login.status(), StatusCode::OK);
+    login
+        .headers()
+        .get("set-cookie")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string()
 }

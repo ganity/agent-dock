@@ -160,6 +160,19 @@ select {
   line-height: 1.55;
 }
 
+.session-home-admin-link {
+  width: fit-content;
+  color: #c8d8f7;
+  font-size: 0.94rem;
+  font-weight: 760;
+  text-decoration: none;
+}
+
+.session-home-admin-link:hover {
+  color: #f4f6fb;
+  text-decoration: underline;
+}
+
 .eyebrow {
   margin: 0;
   color: #88a5d9;

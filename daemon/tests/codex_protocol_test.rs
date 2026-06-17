@@ -1,6 +1,6 @@
 use agent_dock_daemon::adapters::codex_protocol::{
-    CodexSessionProtocol, UserMessage, build_initialize_request, build_thread_resume_request,
-    build_thread_start_request, build_turn_start_request, parse_notification_event,
+    build_initialize_request, build_thread_resume_request, build_thread_start_request,
+    build_turn_start_request, parse_notification_event, CodexSessionProtocol, UserMessage,
 };
 
 #[test]
@@ -167,4 +167,181 @@ fn attached_protocol_bootstraps_resume_and_flushes_queued_messages() {
     assert_eq!(thread_result.outgoing.len(), 1);
     assert_eq!(thread_result.outgoing[0]["method"], "turn/start");
     assert_eq!(thread_result.outgoing[0]["params"]["threadId"], "thread-1");
+}
+
+#[test]
+fn protocol_maps_compact_slash_command_to_real_thread_compact_request() {
+    let mut protocol = ready_protocol();
+
+    let outgoing = protocol
+        .enqueue_user_message(UserMessage {
+            text: "/compact".into(),
+            image_paths: Vec::new(),
+        })
+        .unwrap();
+
+    assert_eq!(outgoing.len(), 1);
+    assert_eq!(outgoing[0]["method"], "thread/compact/start");
+    assert_eq!(outgoing[0]["params"]["threadId"], "thread-1");
+
+    let response = format!(
+        r#"{{"jsonrpc":"2.0","id":{},"result":{{}}}}"#,
+        serde_json::to_string(outgoing[0]["id"].as_str().unwrap()).unwrap()
+    );
+    let result = protocol.handle_server_line(&response).unwrap();
+
+    let event = result.event.unwrap();
+    assert_eq!(event.event_type, "assistant.message");
+    assert!(event.payload_json.contains("Compaction started"));
+}
+
+#[test]
+fn protocol_maps_goal_query_to_real_thread_goal_get_request() {
+    let mut protocol = ready_protocol();
+
+    let outgoing = protocol
+        .enqueue_user_message(UserMessage {
+            text: "/goal".into(),
+            image_paths: Vec::new(),
+        })
+        .unwrap();
+
+    assert_eq!(outgoing.len(), 1);
+    assert_eq!(outgoing[0]["method"], "thread/goal/get");
+    assert_eq!(outgoing[0]["params"]["threadId"], "thread-1");
+
+    let response = format!(
+        r#"{{"jsonrpc":"2.0","id":{},"result":{{"goal":{{"threadId":"thread-1","objective":"Ship slash commands","status":"active","tokenBudget":null,"tokensUsed":12,"timeUsedSeconds":3,"createdAt":1,"updatedAt":2}}}}}}"#,
+        serde_json::to_string(outgoing[0]["id"].as_str().unwrap()).unwrap()
+    );
+    let result = protocol.handle_server_line(&response).unwrap();
+
+    let event = result.event.unwrap();
+    assert_eq!(event.event_type, "assistant.message");
+    assert!(event.payload_json.contains("Ship slash commands"));
+    assert!(event.payload_json.contains("active"));
+}
+
+#[test]
+fn protocol_maps_goal_clear_to_real_thread_goal_clear_request() {
+    let mut protocol = ready_protocol();
+
+    let outgoing = protocol
+        .enqueue_user_message(UserMessage {
+            text: "/goal clear".into(),
+            image_paths: Vec::new(),
+        })
+        .unwrap();
+
+    assert_eq!(outgoing.len(), 1);
+    assert_eq!(outgoing[0]["method"], "thread/goal/clear");
+    assert_eq!(outgoing[0]["params"]["threadId"], "thread-1");
+
+    let response = format!(
+        r#"{{"jsonrpc":"2.0","id":{},"result":{{"cleared":true}}}}"#,
+        serde_json::to_string(outgoing[0]["id"].as_str().unwrap()).unwrap()
+    );
+    let result = protocol.handle_server_line(&response).unwrap();
+
+    let event = result.event.unwrap();
+    assert_eq!(event.event_type, "assistant.message");
+    assert!(event.payload_json.contains("Goal cleared"));
+}
+
+#[test]
+fn protocol_maps_goal_text_to_real_thread_goal_set_request() {
+    let mut protocol = ready_protocol();
+
+    let outgoing = protocol
+        .enqueue_user_message(UserMessage {
+            text: "/goal Finish command support".into(),
+            image_paths: Vec::new(),
+        })
+        .unwrap();
+
+    assert_eq!(outgoing.len(), 1);
+    assert_eq!(outgoing[0]["method"], "thread/goal/set");
+    assert_eq!(outgoing[0]["params"]["threadId"], "thread-1");
+    assert_eq!(outgoing[0]["params"]["objective"], "Finish command support");
+
+    let response = format!(
+        r#"{{"jsonrpc":"2.0","id":{},"result":{{"goal":{{"threadId":"thread-1","objective":"Finish command support","status":"active","tokenBudget":null,"tokensUsed":0,"timeUsedSeconds":0,"createdAt":1,"updatedAt":2}}}}}}"#,
+        serde_json::to_string(outgoing[0]["id"].as_str().unwrap()).unwrap()
+    );
+    let result = protocol.handle_server_line(&response).unwrap();
+
+    let event = result.event.unwrap();
+    assert_eq!(event.event_type, "assistant.message");
+    assert!(event.payload_json.contains("Goal set"));
+    assert!(event.payload_json.contains("Finish command support"));
+}
+
+#[test]
+fn protocol_maps_command_errors_to_visible_assistant_messages() {
+    let mut protocol = ready_protocol();
+
+    let outgoing = protocol
+        .enqueue_user_message(UserMessage {
+            text: "/compact".into(),
+            image_paths: Vec::new(),
+        })
+        .unwrap();
+
+    let response = format!(
+        r#"{{"jsonrpc":"2.0","id":{},"error":{{"code":-32000,"message":"thread is busy"}}}}"#,
+        serde_json::to_string(outgoing[0]["id"].as_str().unwrap()).unwrap()
+    );
+    let result = protocol.handle_server_line(&response).unwrap();
+
+    let event = result.event.unwrap();
+    assert_eq!(event.event_type, "assistant.message");
+    assert!(event.payload_json.contains("Command failed"));
+    assert!(event.payload_json.contains("thread is busy"));
+}
+
+#[test]
+fn protocol_keeps_unknown_slash_commands_as_normal_turns() {
+    let mut protocol = ready_protocol();
+
+    let outgoing = protocol
+        .enqueue_user_message(UserMessage {
+            text: "/resume".into(),
+            image_paths: Vec::new(),
+        })
+        .unwrap();
+
+    assert_eq!(outgoing.len(), 1);
+    assert_eq!(outgoing[0]["method"], "turn/start");
+    assert_eq!(outgoing[0]["params"]["input"][0]["text"], "/resume");
+}
+
+#[test]
+fn protocol_keeps_commands_with_images_as_normal_turns() {
+    let mut protocol = ready_protocol();
+
+    let outgoing = protocol
+        .enqueue_user_message(UserMessage {
+            text: "/compact".into(),
+            image_paths: vec!["/tmp/screenshot.png".into()],
+        })
+        .unwrap();
+
+    assert_eq!(outgoing.len(), 1);
+    assert_eq!(outgoing[0]["method"], "turn/start");
+    assert_eq!(outgoing[0]["params"]["input"][0]["text"], "/compact");
+    assert_eq!(outgoing[0]["params"]["input"][1]["type"], "localImage");
+}
+
+fn ready_protocol() -> CodexSessionProtocol {
+    let mut protocol = CodexSessionProtocol::new("/tmp/workspace".into());
+    protocol.bootstrap_requests();
+    protocol
+        .handle_server_line(r#"{"jsonrpc":"2.0","id":"agent-dock-initialize-1","result":{}}"#)
+        .unwrap();
+    protocol
+        .handle_server_line(
+            r#"{"jsonrpc":"2.0","id":"agent-dock-thread-start-2","result":{"thread":{"id":"thread-1"}}}"#,
+        )
+        .unwrap();
+    protocol
 }

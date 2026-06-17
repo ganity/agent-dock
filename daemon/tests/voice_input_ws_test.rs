@@ -73,11 +73,13 @@ async fn voice_input_websocket_proxies_transcripts_from_asr_server() {
         listen: "127.0.0.1:4123".into(),
         pin: "1234".into(),
         database_path: "./daemon-data/agent-dock.sqlite3".into(),
+        claude_projects_path: None,
         roots: vec![WorkspaceRoot {
             id: "workspace".into(),
             label: "Workspace".into(),
             path: "/tmp/workspace".into(),
         }],
+        bootstrap_admin_password: Some("1234".into()),
         voice_input: Some(VoiceInputConfig {
             websocket_url: format!("ws://{upstream_address}"),
             app_id: "app-123".into(),
@@ -94,7 +96,9 @@ async fn voice_input_websocket_proxies_transcripts_from_asr_server() {
                 .method("POST")
                 .uri("/api/auth/login")
                 .header("content-type", "application/json")
-                .body(Body::from(r#"{"pin":"1234"}"#))
+                .body(Body::from(
+                    r#"{"username":"admin","password":"1234"}"#,
+                ))
                 .unwrap(),
         )
         .await

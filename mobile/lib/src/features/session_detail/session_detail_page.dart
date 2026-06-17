@@ -37,6 +37,7 @@ class SessionDetailPage extends StatefulWidget {
     this.voice,
     this.token,
     this.session,
+    this.initialSnapshot,
     this.currentUserId,
     this.composerDraftStore,
     this.sessionDetailCacheStore,
@@ -54,6 +55,7 @@ class SessionDetailPage extends StatefulWidget {
   final VoiceConfig? voice;
   final String? token;
   final SessionSummary? session;
+  final SessionSnapshot? initialSnapshot;
   final String? currentUserId;
   final SessionComposerDraftStore? composerDraftStore;
   final SessionDetailCacheStore? sessionDetailCacheStore;
@@ -142,7 +144,8 @@ class _SessionDetailPageState extends State<SessionDetailPage>
     await HapticFeedback.selectionClick();
   }
 
-  SessionSummary? get _sessionSummary => _resolvedSessionSummary ?? widget.session;
+  SessionSummary? get _sessionSummary =>
+      _resolvedSessionSummary ?? widget.session;
 
   SessionComposerDraftScope? get _draftScope {
     final daemonUrl = widget.daemonUrl;
@@ -323,12 +326,19 @@ class _SessionDetailPageState extends State<SessionDetailPage>
     final api = widget.api;
     final token = widget.token;
     final session = widget.session;
+    final initialSnapshot = widget.initialSnapshot;
     final detailCacheStore = widget.sessionDetailCacheStore;
     final detailCacheScope = _detailCacheScope;
     final cachedSession = detailCacheStore != null && detailCacheScope != null
         ? detailCacheStore.readCache(scope: detailCacheScope)
         : null;
-    if (cachedSession != null) {
+    if (initialSnapshot != null) {
+      _events = List<SessionEvent>.from(initialSnapshot.events);
+      _hasMoreHistory = initialSnapshot.hasMoreHistory;
+      _cachedSnapshot = initialSnapshot;
+      _resolvedSessionSummary = initialSnapshot.toSummary();
+      _hasAutoScrolledToLatest = true;
+    } else if (cachedSession != null) {
       _events = List<SessionEvent>.from(cachedSession.events);
       _hasMoreHistory = cachedSession.hasMoreHistory;
       _expandedTimelineItemKeys.addAll(cachedSession.expandedItemKeys);
@@ -351,6 +361,8 @@ class _SessionDetailPageState extends State<SessionDetailPage>
     }
     if (api == null || token == null || session == null) {
       _snapshotFuture = Future<SessionSnapshot?>.value(null);
+    } else if (initialSnapshot != null) {
+      _snapshotFuture = SynchronousFuture<SessionSnapshot?>(initialSnapshot);
     } else if (cachedSession != null) {
       _snapshotFuture = SynchronousFuture<SessionSnapshot?>(_cachedSnapshot);
     } else {
@@ -467,8 +479,7 @@ class _SessionDetailPageState extends State<SessionDetailPage>
         events: events,
         hasMoreHistory: _hasMoreHistory,
         expandedItemKeys: _expandedTimelineItemKeys,
-        autoExpandedFailedToolItemKeys:
-            _handledAutoExpandedFailedToolItemKeys,
+        autoExpandedFailedToolItemKeys: _handledAutoExpandedFailedToolItemKeys,
         scrollOffset: scrollOffset,
       ),
     );
@@ -491,9 +502,7 @@ class _SessionDetailPageState extends State<SessionDetailPage>
       return;
     }
     final maxScrollExtent = _timelineScrollController.position.maxScrollExtent;
-    _timelineScrollController.jumpTo(
-      cachedOffset.clamp(0.0, maxScrollExtent),
-    );
+    _timelineScrollController.jumpTo(cachedOffset.clamp(0.0, maxScrollExtent));
     _hasRestoredScrollOffset = true;
   }
 
@@ -985,7 +994,9 @@ class _SessionDetailPageState extends State<SessionDetailPage>
       setState(() {
         _isConnectingVoice = false;
         _isListeningForVoice = false;
-        _cancelFadingVoiceStatusText = disableAnimations ? null : fadingStatusText;
+        _cancelFadingVoiceStatusText = disableAnimations
+            ? null
+            : fadingStatusText;
         _cancelFadingVoiceStatusIndicatorState = disableAnimations
             ? _ComposerVoiceStatusIndicatorState.none
             : fadingStatusIndicatorState;
@@ -1029,7 +1040,8 @@ class _SessionDetailPageState extends State<SessionDetailPage>
               _isConnectingVoice = true;
               _voiceStatusText = 'Connecting Doubao voice...';
               _cancelFadingVoiceStatusText = null;
-              _voiceStatusIndicatorState = _ComposerVoiceStatusIndicatorState.none;
+              _voiceStatusIndicatorState =
+                  _ComposerVoiceStatusIndicatorState.none;
               _cancelFadingVoiceStatusIndicatorState =
                   _ComposerVoiceStatusIndicatorState.none;
             });
@@ -1132,10 +1144,7 @@ class _SessionDetailPageState extends State<SessionDetailPage>
         final prependedEvents = older.events
             .where((event) => !currentIds.contains(event.id))
             .toList();
-        _events = <SessionEvent>[
-          ...prependedEvents,
-          ...currentEvents,
-        ];
+        _events = <SessionEvent>[...prependedEvents, ...currentEvents];
         _prependedTimelineItemKeys = _visibleTimelineItems(
           prependedEvents,
           showDebugTimelineItems: _showDebugTimelineItems,
@@ -1518,7 +1527,8 @@ class _SessionDetailPageState extends State<SessionDetailPage>
               if (_isUnauthorizedEventStreamError(error)) {
                 unawaited(_handleUnauthorizedStream());
                 timeline = const SizedBox.shrink();
-              } else if (error is DaemonApiException && error.statusCode == 403) {
+              } else if (error is DaemonApiException &&
+                  error.statusCode == 403) {
                 _isForbiddenSnapshot = true;
                 _streamError = _streamForbiddenText;
                 _isEventStreamConnected = false;
@@ -1599,8 +1609,7 @@ class _SessionDetailPageState extends State<SessionDetailPage>
                       collapseCount: _streamBannerCollapseCount,
                       isConnected: _isEventStreamConnected,
                       onRetry: _connectEventStream,
-                      onBackToSessions: () =>
-                          Navigator.of(context).maybePop(),
+                      onBackToSessions: () => Navigator.of(context).maybePop(),
                     ),
                     if (_isLoadingOlderEvents)
                       const Padding(
@@ -1724,10 +1733,7 @@ class _NewUpdatesChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final label = count == 1 ? '1 new update' : '$count new updates';
-    final button = FilledButton.tonal(
-      onPressed: onPressed,
-      child: Text(label),
-    );
+    final button = FilledButton.tonal(onPressed: onPressed, child: Text(label));
     if (MediaQuery.disableAnimationsOf(context)) {
       return button;
     }
@@ -1800,10 +1806,7 @@ class _SessionDetailsSheet extends StatelessWidget {
                   value: runtimeSessionId!,
                 ),
               if (daemonHost != null)
-                _SessionDetailRow(
-                  label: 'Daemon URL host',
-                  value: daemonHost!,
-                ),
+                _SessionDetailRow(label: 'Daemon URL host', value: daemonHost!),
             ],
           ),
         ),
@@ -1927,7 +1930,9 @@ class _ChatSkeletonBlock extends StatelessWidget {
   Widget build(BuildContext context) {
     return FractionallySizedBox(
       widthFactor: widthFactor,
-      alignment: widthFactor < 0.8 ? Alignment.centerRight : Alignment.centerLeft,
+      alignment: widthFactor < 0.8
+          ? Alignment.centerRight
+          : Alignment.centerLeft,
       child: DecoratedBox(
         decoration: BoxDecoration(
           color: const Color(0xFF101820),
@@ -2327,7 +2332,10 @@ class _SessionTimelineState extends State<_SessionTimeline> {
     }
     final projectedItems = _projectedItems;
     final previousLeadingKey = _leadingRenderedKey;
-    _primeEntryAnimations(projectedItems, previousLeadingKey: previousLeadingKey);
+    _primeEntryAnimations(
+      projectedItems,
+      previousLeadingKey: previousLeadingKey,
+    );
     final activeReasoningIndex =
         projectedItems.isNotEmpty && projectedItems.last is ThinkingItem
         ? projectedItems.length - 1
@@ -2414,7 +2422,9 @@ class _SessionTimelineState extends State<_SessionTimeline> {
     required String? previousLeadingKey,
   }) {
     final currentKeys = projectedItems.map(_timelineItemKey).toList();
-    final newKeys = currentKeys.where((key) => !_seenItemKeys.contains(key)).toSet();
+    final newKeys = currentKeys
+        .where((key) => !_seenItemKeys.contains(key))
+        .toSet();
     final prependBoundaryIndex = previousLeadingKey == null
         ? -1
         : currentKeys.indexOf(previousLeadingKey);
@@ -2752,18 +2762,20 @@ class _TimelineItemCard extends StatelessWidget {
           ),
         ),
       ),
-      AttachedSessionItem(:final runtimeSessionId) => _CollapsibleAttachedRuntimeCard(
-        expanded: expandedItemKeys.contains(itemKey),
-        runtimeSessionId: runtimeSessionId,
-        onCopyRuntimeSessionId: runtimeSessionId == null || runtimeSessionId.isEmpty
-            ? null
-            : () => _copyToClipboard(
-                context,
-                runtimeSessionId,
-                'Runtime session ID',
-              ),
-        onToggleExpanded: () => onToggleExpanded(itemKey),
-      ),
+      AttachedSessionItem(:final runtimeSessionId) =>
+        _CollapsibleAttachedRuntimeCard(
+          expanded: expandedItemKeys.contains(itemKey),
+          runtimeSessionId: runtimeSessionId,
+          onCopyRuntimeSessionId:
+              runtimeSessionId == null || runtimeSessionId.isEmpty
+              ? null
+              : () => _copyToClipboard(
+                  context,
+                  runtimeSessionId,
+                  'Runtime session ID',
+                ),
+          onToggleExpanded: () => onToggleExpanded(itemKey),
+        ),
       StatusSummaryItem(:final status) => Semantics(
         container: true,
         explicitChildNodes: true,
@@ -2785,12 +2797,13 @@ class _TimelineItemCard extends StatelessWidget {
           ),
         ),
       ),
-      UnknownEventItem(:final eventType, :final details) => _CollapsibleUnknownEventCard(
-        eventType: eventType,
-        details: details,
-        expanded: expandedItemKeys.contains(itemKey),
-        onToggleExpanded: () => onToggleExpanded(itemKey),
-      ),
+      UnknownEventItem(:final eventType, :final details) =>
+        _CollapsibleUnknownEventCard(
+          eventType: eventType,
+          details: details,
+          expanded: expandedItemKeys.contains(itemKey),
+          onToggleExpanded: () => onToggleExpanded(itemKey),
+        ),
     };
   }
 
@@ -2838,10 +2851,7 @@ class _CollapsibleUnknownEventCard extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(eventType, style: Theme.of(context).textTheme.titleLarge),
-                if (expanded) ...[
-                  const SizedBox(height: 10),
-                  Text(details),
-                ],
+                if (expanded) ...[const SizedBox(height: 10), Text(details)],
               ],
             ),
           ),
@@ -2885,7 +2895,9 @@ class _CollapsibleAttachedRuntimeCard extends StatelessWidget {
                 ),
                 const SizedBox(height: 10),
                 const Text('Connected to an existing runtime session.'),
-                if (expanded && runtimeSessionId != null && runtimeSessionId.isNotEmpty) ...[
+                if (expanded &&
+                    runtimeSessionId != null &&
+                    runtimeSessionId.isNotEmpty) ...[
                   const SizedBox(height: 14),
                   _SessionDetailRow(
                     label: 'Runtime session ID',
@@ -5201,9 +5213,7 @@ class _FileChangeAccentState extends State<_FileChangeAccent> {
         borderRadius: borderRadius,
         child: Stack(
           children: [
-            Positioned.fill(
-              child: ColoredBox(color: accentColor),
-            ),
+            Positioned.fill(child: ColoredBox(color: accentColor)),
             if (shouldShowScanLine)
               AnimatedAlign(
                 duration: _scanAnimationDuration,
@@ -5368,7 +5378,8 @@ class _ComposerPreview extends StatelessWidget {
   final String? voiceStatusText;
   final String? cancelFadingVoiceStatusText;
   final _ComposerVoiceStatusIndicatorState voiceStatusIndicatorState;
-  final _ComposerVoiceStatusIndicatorState cancelFadingVoiceStatusIndicatorState;
+  final _ComposerVoiceStatusIndicatorState
+  cancelFadingVoiceStatusIndicatorState;
   final bool voiceRetryAvailable;
   final bool enabled;
   final bool canSubmit;
@@ -5416,7 +5427,11 @@ class _ComposerPreview extends StatelessWidget {
                   child: CircularProgressIndicator(strokeWidth: 2),
                 )
         : const Icon(Icons.arrow_upward_rounded);
-    final voiceIcon = switch ((isConnectingVoice, isListeningForVoice, disableAnimations)) {
+    final voiceIcon = switch ((
+      isConnectingVoice,
+      isListeningForVoice,
+      disableAnimations,
+    )) {
       (true, _, true) => const Icon(
         Icons.mic_rounded,
         key: ValueKey('composer-voice-active-static-icon'),
@@ -5625,7 +5640,8 @@ class _ComposerStatusRow extends StatelessWidget {
             key: ValueKey('composer-voice-permission-warning-icon'),
             size: 16,
           ),
-        if (voiceStatusIndicatorState != _ComposerVoiceStatusIndicatorState.none)
+        if (voiceStatusIndicatorState !=
+            _ComposerVoiceStatusIndicatorState.none)
           _ComposerVoiceStatusIndicator(
             state: voiceStatusIndicatorState,
             disableAnimations: disableAnimations,
@@ -5749,10 +5765,7 @@ class _ComposerInputField extends StatelessWidget {
         hintText: enabled ? 'Message the agent' : 'Connect daemon to send',
         filled: false,
         fillColor: Colors.transparent,
-        contentPadding: const EdgeInsets.symmetric(
-          horizontal: 6,
-          vertical: 14,
-        ),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 6, vertical: 14),
         border: InputBorder.none,
         enabledBorder: InputBorder.none,
         focusedBorder: InputBorder.none,
@@ -5847,14 +5860,14 @@ class _VoiceStatusWaveformState extends State<_VoiceStatusWaveform>
                       baseHeights[index] *
                       (widget.animate
                           ? 0.72 +
-                              (0.28 *
-                                  (0.5 +
-                                      (0.5 *
-                                          math.sin(
-                                            (progress + phases[index]) *
-                                                math.pi *
-                                                2,
-                                          ))))
+                                (0.28 *
+                                    (0.5 +
+                                        (0.5 *
+                                            math.sin(
+                                              (progress + phases[index]) *
+                                                  math.pi *
+                                                  2,
+                                            ))))
                           : 1),
                 ),
             ],

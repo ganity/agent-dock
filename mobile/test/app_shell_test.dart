@@ -100,9 +100,7 @@ void main() {
       final storage = MemoryAuthStorage();
       await pumpApp(
         tester,
-        api: FakeDaemonApi(
-          healthCheckDelay: const Duration(milliseconds: 200),
-        ),
+        api: FakeDaemonApi(healthCheckDelay: const Duration(milliseconds: 200)),
         daemonUrl: Uri.parse('https://fallback.example.com'),
         storage: storage,
         seedDaemonUrlInStorage: false,
@@ -139,9 +137,7 @@ void main() {
       final storage = MemoryAuthStorage();
       await pumpApp(
         tester,
-        api: FakeDaemonApi(
-          healthCheckDelay: const Duration(milliseconds: 450),
-        ),
+        api: FakeDaemonApi(healthCheckDelay: const Duration(milliseconds: 450)),
         daemonUrl: Uri.parse('https://fallback.example.com'),
         storage: storage,
         seedDaemonUrlInStorage: false,
@@ -869,47 +865,46 @@ void main() {
     );
   });
 
-  testWidgets(
-    'long session lists stay fully reachable in the sessions page',
-    (tester) async {
-      await pumpApp(
-        tester,
-        api: FakeDaemonApi(
-          bootstrap: MobileBootstrap(
-            daemonVersion: '0.1.0',
-            user: const CurrentUser(
-              id: 'usr_workspace',
-              displayName: 'Workspace',
-            ),
-            roots: const <WorkspaceRoot>[],
-            sessions: List<SessionSummary>.generate(
-              16,
-              (index) => SessionSummary(
-                id: 'sess_$index',
-                title: 'Session ${index + 1}',
-                agentKind: 'codex',
-                sourceKind: 'managed',
-                runtimeSessionId: 'runtime_$index',
-                status: 'completed',
-                workspacePath: '/tmp/session_$index',
-              ),
-            ),
-            voice: const VoiceConfig(doubaoDirectAvailable: false),
+  testWidgets('long session lists stay fully reachable in the sessions page', (
+    tester,
+  ) async {
+    await pumpApp(
+      tester,
+      api: FakeDaemonApi(
+        bootstrap: MobileBootstrap(
+          daemonVersion: '0.1.0',
+          user: const CurrentUser(
+            id: 'usr_workspace',
+            displayName: 'Workspace',
           ),
+          roots: const <WorkspaceRoot>[],
+          sessions: List<SessionSummary>.generate(
+            16,
+            (index) => SessionSummary(
+              id: 'sess_$index',
+              title: 'Session ${index + 1}',
+              agentKind: 'codex',
+              sourceKind: 'managed',
+              runtimeSessionId: 'runtime_$index',
+              status: 'completed',
+              workspacePath: '/tmp/session_$index',
+            ),
+          ),
+          voice: const VoiceConfig(doubaoDirectAvailable: false),
         ),
-      );
+      ),
+    );
 
-      await tester.enterText(find.byType(TextField).at(0), 'workspace');
-      await tester.enterText(find.byType(TextField).at(1), '1234');
-      await tester.tap(find.text('Sign in'));
-      await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField).at(0), 'workspace');
+    await tester.enterText(find.byType(TextField).at(1), '1234');
+    await tester.tap(find.text('Sign in'));
+    await tester.pumpAndSettle();
 
-      await tester.drag(find.byType(ListView).first, const Offset(0, -2000));
-      await tester.pumpAndSettle();
+    await tester.drag(find.byType(ListView).first, const Offset(0, -2000));
+    await tester.pumpAndSettle();
 
-      expect(find.text('Session 16'), findsOneWidget);
-    },
-  );
+    expect(find.text('Session 16'), findsOneWidget);
+  });
 
   testWidgets('keeps the running session strip readable at large text scales', (
     tester,
@@ -1178,7 +1173,9 @@ void main() {
         ),
       );
       final api = FakeDaemonApi(
-        bootstrapErrors: <Object>[const SocketException('Network is unreachable')],
+        bootstrapErrors: <Object>[
+          const SocketException('Network is unreachable'),
+        ],
         bootstrap: const MobileBootstrap(
           daemonVersion: '0.1.0',
           user: CurrentUser(id: 'usr_workspace', displayName: 'Workspace'),
@@ -1254,7 +1251,9 @@ void main() {
       await pumpApp(
         tester,
         api: FakeDaemonApi(
-          bootstrapErrors: <Object>[const SocketException('Network is unreachable')],
+          bootstrapErrors: <Object>[
+            const SocketException('Network is unreachable'),
+          ],
         ),
         daemonUrl: Uri.parse('https://fallback.example.com'),
         storage: storage,
@@ -1419,9 +1418,7 @@ void main() {
 
       await tester.pumpWidget(
         AgentDockApp(
-          api: FakeDaemonApi(
-            bootstrapDelay: const Duration(seconds: 3),
-          ),
+          api: FakeDaemonApi(bootstrapDelay: const Duration(seconds: 3)),
           authStorage: storage,
           daemonUrl: Uri.parse('https://fallback.example.com'),
         ),
@@ -1664,6 +1661,65 @@ void main() {
     expect(find.text('Attached runtime'), findsOneWidget);
     expect(find.text('Reasoning'), findsOneWidget);
     expect(find.widgetWithText(TextField, 'Message the agent'), findsOneWidget);
+  });
+
+  testWidgets('resumes a suspended session before opening details', (
+    tester,
+  ) async {
+    final api = FakeDaemonApi(
+      bootstrap: MobileBootstrap(
+        daemonVersion: '0.1.0',
+        user: const CurrentUser(id: 'usr_workspace', displayName: 'Workspace'),
+        roots: const <WorkspaceRoot>[],
+        sessions: const [
+          SessionSummary(
+            id: 'sess_1',
+            title: 'Mobile migration',
+            agentKind: 'codex',
+            sourceKind: 'managed',
+            runtimeSessionId: 'runtime_1',
+            status: 'suspended',
+            workspacePath: '/home/jhz/projects/agent-dock',
+          ),
+        ],
+        voice: const VoiceConfig(doubaoDirectAvailable: false),
+      ),
+      resumeResult: const SessionSnapshot(
+        id: 'sess_1',
+        title: 'Mobile migration',
+        agentKind: 'codex',
+        sourceKind: 'managed',
+        runtimeSessionId: 'runtime_1',
+        workspacePath: '/home/jhz/projects/agent-dock',
+        status: 'running',
+        hasMoreHistory: false,
+        events: [
+          SessionEvent(
+            id: 12,
+            eventType: 'session.status.changed',
+            payload: {'status': 'running'},
+          ),
+        ],
+      ),
+    );
+    await pumpApp(tester, api: api);
+
+    await tester.enterText(find.byType(TextField).at(0), 'workspace');
+    await tester.enterText(find.byType(TextField).at(1), '1234');
+    await tester.tap(find.text('Sign in'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Mobile migration'));
+    await tester.pumpAndSettle();
+
+    expect(api.resumedSessions, ['sess_1:tok_workspace']);
+    expect(api.snapshotRequests, isEmpty);
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('session-status-pill')),
+        matching: find.text('running'),
+      ),
+      findsOneWidget,
+    );
   });
 
   testWidgets(
@@ -2316,11 +2372,7 @@ void main() {
 
       expect(
         clipboardTexts,
-        containsAll([
-          'sess_1',
-          '/home/jhz/projects/agent-dock',
-          'runtime_1',
-        ]),
+        containsAll(['sess_1', '/home/jhz/projects/agent-dock', 'runtime_1']),
       );
       expect(
         hapticCalls.where(
@@ -7281,55 +7333,51 @@ void main() {
     expect(find.widgetWithText(TextField, '/resume '), findsOneWidget);
   });
 
-  testWidgets(
-    'shows dollar command suggestions and inserts the selection',
-    (tester) async {
-      final api = FakeDaemonApi(
-        bootstrap: MobileBootstrap(
-          daemonVersion: '0.1.0',
-          user: const CurrentUser(
-            id: 'usr_workspace',
-            displayName: 'Workspace',
+  testWidgets('shows dollar command suggestions and inserts the selection', (
+    tester,
+  ) async {
+    final api = FakeDaemonApi(
+      bootstrap: MobileBootstrap(
+        daemonVersion: '0.1.0',
+        user: const CurrentUser(id: 'usr_workspace', displayName: 'Workspace'),
+        roots: const <WorkspaceRoot>[],
+        sessions: const [
+          SessionSummary(
+            id: 'sess_1',
+            title: 'Mobile migration',
+            agentKind: 'codex',
+            sourceKind: 'managed',
+            runtimeSessionId: 'runtime_1',
+            status: 'running',
+            workspacePath: '/home/jhz/projects/agent-dock',
           ),
-          roots: const <WorkspaceRoot>[],
-          sessions: const [
-            SessionSummary(
-              id: 'sess_1',
-              title: 'Mobile migration',
-              agentKind: 'codex',
-              sourceKind: 'managed',
-              runtimeSessionId: 'runtime_1',
-              status: 'running',
-              workspacePath: '/home/jhz/projects/agent-dock',
-            ),
-          ],
-          voice: const VoiceConfig(doubaoDirectAvailable: false),
-        ),
-      );
-      await pumpApp(tester, api: api);
+        ],
+        voice: const VoiceConfig(doubaoDirectAvailable: false),
+      ),
+    );
+    await pumpApp(tester, api: api);
 
-      await tester.enterText(find.byType(TextField).at(0), 'workspace');
-      await tester.enterText(find.byType(TextField).at(1), '1234');
-      await tester.tap(find.text('Sign in'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Mobile migration'));
-      await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField).at(0), 'workspace');
+    await tester.enterText(find.byType(TextField).at(1), '1234');
+    await tester.tap(find.text('Sign in'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Mobile migration'));
+    await tester.pumpAndSettle();
 
-      await tester.enterText(
-        find.widgetWithText(TextField, 'Message the agent'),
-        '\$s',
-      );
-      await tester.pumpAndSettle();
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Message the agent'),
+      '\$s',
+    );
+    await tester.pumpAndSettle();
 
-      expect(find.text('\$skills'), findsOneWidget);
-      expect(find.text('/resume'), findsNothing);
+    expect(find.text('\$skills'), findsOneWidget);
+    expect(find.text('/resume'), findsNothing);
 
-      await tester.tap(find.text('\$skills'));
-      await tester.pumpAndSettle();
+    await tester.tap(find.text('\$skills'));
+    await tester.pumpAndSettle();
 
-      expect(find.widgetWithText(TextField, '\$skills '), findsOneWidget);
-    },
-  );
+    expect(find.widgetWithText(TextField, '\$skills '), findsOneWidget);
+  });
 
   testWidgets(
     'preserves an unsent composer draft when leaving and reopening the same session in the active app process',
@@ -10166,7 +10214,10 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Voice input failed. Retry.'), findsOneWidget);
-      expect(find.text('Bad state: Provider handshake corrupted'), findsNothing);
+      expect(
+        find.text('Bad state: Provider handshake corrupted'),
+        findsNothing,
+      );
       expect(find.text('Retry voice'), findsOneWidget);
     },
   );
@@ -12103,8 +12154,7 @@ void main() {
             appId: 'test-app-id',
             accessToken: 'test-access-token',
             resourceId: 'volc.test.resource',
-            websocketUrl:
-                'wss://example.com/test-voice',
+            websocketUrl: 'wss://example.com/test-voice',
           ),
         );
       final socket = FakeDoubaoSocketConnection();
@@ -12166,19 +12216,10 @@ void main() {
       expect(find.widgetWithText(TextField, 'hello world'), findsOneWidget);
       expect(socketClient.requests, hasLength(1));
       final request = socketClient.requests.single;
-      expect(
-        request.url,
-        'wss://example.com/test-voice',
-      );
+      expect(request.url, 'wss://example.com/test-voice');
       expect(request.headers['X-Api-App-Key'], 'test-app-id');
-      expect(
-        request.headers['X-Api-Access-Key'],
-        'test-access-token',
-      );
-      expect(
-        request.headers['X-Api-Resource-Id'],
-        'volc.test.resource',
-      );
+      expect(request.headers['X-Api-Access-Key'], 'test-access-token');
+      expect(request.headers['X-Api-Resource-Id'], 'volc.test.resource');
     },
   );
 
@@ -12524,80 +12565,83 @@ void main() {
     expect(find.text('screenshot.png'), findsNothing);
   });
 
-  testWidgets('composer actions are grouped inside a unified composer surface', (
-    tester,
-  ) async {
-    final api = FakeDaemonApi(
-      bootstrap: MobileBootstrap(
-        daemonVersion: '0.1.0',
-        user: const CurrentUser(id: 'usr_workspace', displayName: 'Workspace'),
-        roots: const <WorkspaceRoot>[],
-        sessions: const [
-          SessionSummary(
-            id: 'sess_1',
-            title: 'Mobile migration',
-            agentKind: 'codex',
-            sourceKind: 'managed',
-            runtimeSessionId: 'runtime_1',
-            status: 'running',
-            workspacePath: '/home/jhz/projects/agent-dock',
+  testWidgets(
+    'composer actions are grouped inside a unified composer surface',
+    (tester) async {
+      final api = FakeDaemonApi(
+        bootstrap: MobileBootstrap(
+          daemonVersion: '0.1.0',
+          user: const CurrentUser(
+            id: 'usr_workspace',
+            displayName: 'Workspace',
           ),
-        ],
-        voice: const VoiceConfig(doubaoDirectAvailable: false),
-      ),
-      snapshot: const SessionSnapshot(
-        id: 'sess_1',
-        title: 'Mobile migration',
-        agentKind: 'codex',
-        sourceKind: 'managed',
-        runtimeSessionId: 'runtime_1',
-        workspacePath: '/home/jhz/projects/agent-dock',
-        status: 'running',
-        hasMoreHistory: false,
-        events: <SessionEvent>[],
-      ),
-    );
+          roots: const <WorkspaceRoot>[],
+          sessions: const [
+            SessionSummary(
+              id: 'sess_1',
+              title: 'Mobile migration',
+              agentKind: 'codex',
+              sourceKind: 'managed',
+              runtimeSessionId: 'runtime_1',
+              status: 'running',
+              workspacePath: '/home/jhz/projects/agent-dock',
+            ),
+          ],
+          voice: const VoiceConfig(doubaoDirectAvailable: false),
+        ),
+        snapshot: const SessionSnapshot(
+          id: 'sess_1',
+          title: 'Mobile migration',
+          agentKind: 'codex',
+          sourceKind: 'managed',
+          runtimeSessionId: 'runtime_1',
+          workspacePath: '/home/jhz/projects/agent-dock',
+          status: 'running',
+          hasMoreHistory: false,
+          events: <SessionEvent>[],
+        ),
+      );
 
-    await pumpApp(tester, api: api);
+      await pumpApp(tester, api: api);
 
-    await tester.enterText(find.byType(TextField).at(0), 'workspace');
-    await tester.enterText(find.byType(TextField).at(1), '1234');
-    await tester.tap(find.text('Sign in'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Mobile migration'));
-    await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField).at(0), 'workspace');
+      await tester.enterText(find.byType(TextField).at(1), '1234');
+      await tester.tap(find.text('Sign in'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Mobile migration'));
+      await tester.pumpAndSettle();
 
-    final surfaceFinder = find.byKey(const ValueKey('composer-input-surface'));
-    expect(surfaceFinder, findsOneWidget);
-    expect(
-      find.descendant(
-        of: surfaceFinder,
-        matching: find.byTooltip('Attach image'),
-      ),
-      findsOneWidget,
-    );
-    expect(
-      find.descendant(
-        of: surfaceFinder,
-        matching: find.widgetWithText(TextField, 'Message the agent'),
-      ),
-      findsOneWidget,
-    );
-    expect(
-      find.descendant(
-        of: surfaceFinder,
-        matching: find.byTooltip('Voice input unavailable'),
-      ),
-      findsOneWidget,
-    );
-    expect(
-      find.descendant(
-        of: surfaceFinder,
-        matching: find.byTooltip('Send'),
-      ),
-      findsOneWidget,
-    );
-  });
+      final surfaceFinder = find.byKey(
+        const ValueKey('composer-input-surface'),
+      );
+      expect(surfaceFinder, findsOneWidget);
+      expect(
+        find.descendant(
+          of: surfaceFinder,
+          matching: find.byTooltip('Attach image'),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: surfaceFinder,
+          matching: find.widgetWithText(TextField, 'Message the agent'),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: surfaceFinder,
+          matching: find.byTooltip('Voice input unavailable'),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: surfaceFinder, matching: find.byTooltip('Send')),
+        findsOneWidget,
+      );
+    },
+  );
 
   testWidgets('attachment picker lets the user choose camera or gallery', (
     tester,
@@ -12719,10 +12763,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Could not pick image'), findsOneWidget);
-      expect(
-        find.text('Bad state: Photo library unavailable'),
-        findsNothing,
-      );
+      expect(find.text('Bad state: Photo library unavailable'), findsNothing);
       expect(api.uploadedAttachments, isEmpty);
     },
   );
@@ -14608,39 +14649,38 @@ void main() {
     },
   );
 
-  testWidgets(
-    'new session sheet shows the spec description under the title',
-    (tester) async {
-      final api = FakeDaemonApi(
-        bootstrap: const MobileBootstrap(
-          daemonVersion: '0.1.0',
-          user: CurrentUser(id: 'usr_workspace', displayName: 'Workspace'),
-          roots: [
-            WorkspaceRoot(
-              id: 'workspace',
-              label: 'Workspace',
-              path: '/home/jhz/projects',
-            ),
-          ],
-          sessions: <SessionSummary>[],
-          voice: VoiceConfig(doubaoDirectAvailable: false),
-        ),
-      );
-      await pumpApp(tester, api: api);
+  testWidgets('new session sheet shows the spec description under the title', (
+    tester,
+  ) async {
+    final api = FakeDaemonApi(
+      bootstrap: const MobileBootstrap(
+        daemonVersion: '0.1.0',
+        user: CurrentUser(id: 'usr_workspace', displayName: 'Workspace'),
+        roots: [
+          WorkspaceRoot(
+            id: 'workspace',
+            label: 'Workspace',
+            path: '/home/jhz/projects',
+          ),
+        ],
+        sessions: <SessionSummary>[],
+        voice: VoiceConfig(doubaoDirectAvailable: false),
+      ),
+    );
+    await pumpApp(tester, api: api);
 
-      await tester.enterText(find.byType(TextField).at(0), 'workspace');
-      await tester.enterText(find.byType(TextField).at(1), '1234');
-      await tester.tap(find.text('Sign in'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(FilledButton, 'New session').first);
-      await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField).at(0), 'workspace');
+    await tester.enterText(find.byType(TextField).at(1), '1234');
+    await tester.tap(find.text('Sign in'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'New session').first);
+    await tester.pumpAndSettle();
 
-      expect(
-        find.text('Create a new managed session in a workspace root.'),
-        findsOneWidget,
-      );
-    },
-  );
+    expect(
+      find.text('Create a new managed session in a workspace root.'),
+      findsOneWidget,
+    );
+  });
 
   testWidgets('attaches an existing runtime session from the sessions page', (
     tester,
@@ -14699,9 +14739,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(api.attachedSessions, [
-      'workspace:agent-dock:claude:thread-abc',
-    ]);
+    expect(api.attachedSessions, ['workspace:agent-dock:claude:thread-abc']);
     expect(find.byTooltip('Session details'), findsOneWidget);
     expect(find.widgetWithText(TextField, 'Message the agent'), findsOneWidget);
   });
@@ -14896,9 +14934,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(api.attachedSessions, [
-      'workspace:agent-dock:claude:thread-abc',
-    ]);
+    expect(api.attachedSessions, ['workspace:agent-dock:claude:thread-abc']);
     expect(storage.didClear, isTrue);
     expect(storage.profile, isNull);
     expect(find.text('Unlock workspace'), findsOneWidget);
@@ -15252,9 +15288,7 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(api.attachedSessions, [
-        'workspace:agent-dock:claude:thread-xyz',
-      ]);
+      expect(api.attachedSessions, ['workspace:agent-dock:claude:thread-xyz']);
       expect(find.text('Resume target'), findsAtLeastNWidgets(1));
     },
   );
@@ -15382,7 +15416,10 @@ void main() {
 
       final attachSheet = find.byType(BottomSheet);
       expect(
-        find.descendant(of: attachSheet, matching: find.text('Recent sessions')),
+        find.descendant(
+          of: attachSheet,
+          matching: find.text('Recent sessions'),
+        ),
         findsOneWidget,
       );
       for (var index = 1; index <= 5; index++) {
@@ -15394,7 +15431,10 @@ void main() {
           findsOneWidget,
         );
         expect(
-          find.descendant(of: attachSheet, matching: find.text('thread-$index')),
+          find.descendant(
+            of: attachSheet,
+            matching: find.text('thread-$index'),
+          ),
           findsOneWidget,
         );
       }
@@ -15912,10 +15952,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Delete agent-dock?'), findsOneWidget);
-      expect(
-        find.text('Delete /home/jhz/projects/agent-dock?'),
-        findsNothing,
-      );
+      expect(find.text('Delete /home/jhz/projects/agent-dock?'), findsNothing);
     },
   );
 
@@ -15966,10 +16003,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Delete agent-dock?'), findsOneWidget);
-      expect(
-        find.text('Delete /home/jhz/projects/agent-dock?'),
-        findsNothing,
-      );
+      expect(find.text('Delete /home/jhz/projects/agent-dock?'), findsNothing);
     },
   );
 
@@ -16412,8 +16446,12 @@ void main() {
     final openTopLeft = tester.getTopLeft(find.text('Open'));
     final detailsTopLeft = tester.getTopLeft(find.text('Session details'));
     expect(openTopLeft.dy, lessThan(detailsTopLeft.dy));
-    final runtimeTopLeft = tester.getTopLeft(find.text('Copy runtime session ID'));
-    final workspaceTopLeft = tester.getTopLeft(find.text('Copy workspace path'));
+    final runtimeTopLeft = tester.getTopLeft(
+      find.text('Copy runtime session ID'),
+    );
+    final workspaceTopLeft = tester.getTopLeft(
+      find.text('Copy workspace path'),
+    );
     expect(runtimeTopLeft.dy, lessThan(workspaceTopLeft.dy));
 
     await tester.tap(find.text('Copy workspace path'));
@@ -16760,9 +16798,7 @@ void main() {
     (tester) async {
       await pumpApp(
         tester,
-        api: FakeDaemonApi(
-          loginError: StateError('Login flow corrupted'),
-        ),
+        api: FakeDaemonApi(loginError: StateError('Login flow corrupted')),
       );
 
       await tester.enterText(find.byType(TextField).at(0), 'workspace');
@@ -17027,13 +17063,19 @@ void main() {
         find.byKey(const ValueKey('sessions-skeleton-list')),
         findsOneWidget,
       );
+      expect(find.byKey(const ValueKey('sessions-loaded-list')), findsNothing);
       expect(
-        find.byKey(const ValueKey('sessions-loaded-list')),
-        findsNothing,
+        find.byKey(const ValueKey('sessions-skeleton-row-0')),
+        findsOneWidget,
       );
-      expect(find.byKey(const ValueKey('sessions-skeleton-row-0')), findsOneWidget);
-      expect(find.byKey(const ValueKey('sessions-skeleton-row-1')), findsOneWidget);
-      expect(find.byKey(const ValueKey('sessions-skeleton-row-2')), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('sessions-skeleton-row-1')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('sessions-skeleton-row-2')),
+        findsOneWidget,
+      );
       expect(
         find.byKey(const ValueKey('sessions-skeleton-shimmer-0')),
         findsOneWidget,
@@ -17042,8 +17084,14 @@ void main() {
       await tester.pump(const Duration(seconds: 1));
       await tester.pumpAndSettle();
 
-      expect(find.byKey(const ValueKey('sessions-skeleton-list')), findsNothing);
-      expect(find.byKey(const ValueKey('sessions-loaded-list')), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('sessions-skeleton-list')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const ValueKey('sessions-loaded-list')),
+        findsOneWidget,
+      );
       expect(find.text('Sessions'), findsOneWidget);
       expect(find.text('Delayed session'), findsOneWidget);
     },
@@ -17143,8 +17191,14 @@ void main() {
 
       expect(api.bootstrappedTokens, ['tok_workspace', 'tok_workspace']);
       expect(find.text('Recovered session'), findsOneWidget);
-      expect(find.byKey(const ValueKey('sessions-loaded-list')), findsOneWidget);
-      expect(find.byKey(const ValueKey('sessions-skeleton-list')), findsNothing);
+      expect(
+        find.byKey(const ValueKey('sessions-loaded-list')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('sessions-skeleton-list')),
+        findsNothing,
+      );
       expect(
         find.byKey(const ValueKey('sessions-status-banner')),
         findsNothing,
@@ -17360,6 +17414,7 @@ class FakeDaemonApi implements DaemonApi {
     this.snapshotDelay,
     this.snapshotError,
     SessionSnapshot? snapshot,
+    SessionSnapshot? resumeResult,
     SessionSnapshot? olderSnapshot,
     this.olderSnapshotError,
     this.olderSnapshotDelay,
@@ -17423,6 +17478,7 @@ class FakeDaemonApi implements DaemonApi {
              hasMoreHistory: false,
              events: <SessionEvent>[],
            ),
+       resumeResult = resumeResult ?? snapshot,
        olderSnapshotResult = olderSnapshot,
        bootstrapResult =
            bootstrap ??
@@ -17477,6 +17533,7 @@ class FakeDaemonApi implements DaemonApi {
   final Duration? snapshotDelay;
   final Object? snapshotError;
   final SessionSnapshot snapshotResult;
+  final SessionSnapshot? resumeResult;
   final SessionSnapshot? olderSnapshotResult;
   final Object? olderSnapshotError;
   final Duration? olderSnapshotDelay;
@@ -17504,6 +17561,7 @@ class FakeDaemonApi implements DaemonApi {
   final List<String> bootstrappedTokens = <String>[];
   final List<String> directoryRequests = <String>[];
   final List<String> snapshotRequests = <String>[];
+  final List<String> resumedSessions = <String>[];
   final List<String> eventSubscriptions = <String>[];
   final List<String> uploadedAttachments = <String>[];
   final List<String> sentMessages = <String>[];
@@ -17593,6 +17651,15 @@ class FakeDaemonApi implements DaemonApi {
       throw snapshotError!;
     }
     return snapshotResult;
+  }
+
+  @override
+  Future<SessionSnapshot> resumeSession({
+    required String sessionId,
+    required String token,
+  }) async {
+    resumedSessions.add('$sessionId:$token');
+    return resumeResult ?? snapshotResult;
   }
 
   @override
@@ -17893,10 +17960,9 @@ class FakeImageAttachmentPicker implements ImageAttachmentPicker {
     this.image,
     List<PickedImageAttachment>? images,
     this.error,
-  })
-    : _images = images == null
-          ? null
-          : List<PickedImageAttachment>.from(images);
+  }) : _images = images == null
+           ? null
+           : List<PickedImageAttachment>.from(images);
 
   final PickedImageAttachment? image;
   final List<PickedImageAttachment>? _images;

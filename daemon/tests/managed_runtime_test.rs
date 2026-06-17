@@ -159,6 +159,103 @@ async fn managed_codex_session_bootstraps_protocol_and_flushes_user_message() {
 }
 
 #[tokio::test]
+async fn managed_codex_session_sends_compact_slash_command_as_thread_compact_request() {
+    let dir = tempdir().unwrap();
+    let captured_path = dir.path().join("compact-request.jsonl");
+    let captured_path_for_spawner = captured_path.clone();
+    let store = SqliteSessionStore::in_memory().await.unwrap();
+    let spawner = Arc::new(move |_command: LaunchCommand| {
+        spawn_command(LaunchCommand {
+            program: "sh".into(),
+            args: vec![
+                "-lc".into(),
+                "IFS= read -r _init; printf '%s\n' '{\"jsonrpc\":\"2.0\",\"id\":\"agent-dock-initialize-1\",\"result\":{}}'; \
+                 IFS= read -r _thread; printf '%s\n' '{\"jsonrpc\":\"2.0\",\"id\":\"agent-dock-thread-start-2\",\"result\":{\"thread\":{\"id\":\"thread-1\"}}}'; \
+                 IFS= read -r command_request; printf '%s\n' \"$command_request\" > \"$1\"; \
+                 command_id=$(printf '%s' \"$command_request\" | sed -n 's/.*\"id\":\"\\([^\"]*\\)\".*/\\1/p'); \
+                 printf '{\"jsonrpc\":\"2.0\",\"id\":\"%s\",\"result\":{}}\n' \"$command_id\"".into(),
+                "agent-dock-test".into(),
+                captured_path_for_spawner.to_string_lossy().into_owned(),
+            ],
+        })
+    });
+
+    let service = SessionService::new_with_spawner(store, spawner);
+    let session_id = service
+        .create_managed_session("workspace".into(), "repo".into(), "codex".into(), None)
+        .await
+        .unwrap();
+
+    service
+        .send_user_message(&session_id, "/compact".into())
+        .await
+        .unwrap();
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let captured = tokio::fs::read_to_string(captured_path).await.unwrap();
+    assert!(captured.contains(r#""method":"thread/compact/start""#));
+    assert!(captured.contains(r#""threadId":"thread-1""#));
+    assert!(!captured.contains(r#""method":"turn/start""#));
+
+    let snapshot = service.load_snapshot(&session_id).await.unwrap();
+    assert!(snapshot
+        .events
+        .iter()
+        .any(|event| event.event_type == "assistant.message"
+            && event.payload_json.contains("Compaction started")));
+}
+
+#[tokio::test]
+async fn managed_codex_session_sends_goal_slash_command_as_thread_goal_set_request() {
+    let dir = tempdir().unwrap();
+    let captured_path = dir.path().join("goal-request.jsonl");
+    let captured_path_for_spawner = captured_path.clone();
+    let store = SqliteSessionStore::in_memory().await.unwrap();
+    let spawner = Arc::new(move |_command: LaunchCommand| {
+        spawn_command(LaunchCommand {
+            program: "sh".into(),
+            args: vec![
+                "-lc".into(),
+                "IFS= read -r _init; printf '%s\n' '{\"jsonrpc\":\"2.0\",\"id\":\"agent-dock-initialize-1\",\"result\":{}}'; \
+                 IFS= read -r _thread; printf '%s\n' '{\"jsonrpc\":\"2.0\",\"id\":\"agent-dock-thread-start-2\",\"result\":{\"thread\":{\"id\":\"thread-1\"}}}'; \
+                 IFS= read -r command_request; printf '%s\n' \"$command_request\" > \"$1\"; \
+                 command_id=$(printf '%s' \"$command_request\" | sed -n 's/.*\"id\":\"\\([^\"]*\\)\".*/\\1/p'); \
+                 printf '{\"jsonrpc\":\"2.0\",\"id\":\"%s\",\"result\":{\"goal\":{\"threadId\":\"thread-1\",\"objective\":\"Finish slash command support\",\"status\":\"active\",\"tokenBudget\":null,\"tokensUsed\":0,\"timeUsedSeconds\":0,\"createdAt\":1,\"updatedAt\":2}}}\n' \"$command_id\"".into(),
+                "agent-dock-test".into(),
+                captured_path_for_spawner.to_string_lossy().into_owned(),
+            ],
+        })
+    });
+
+    let service = SessionService::new_with_spawner(store, spawner);
+    let session_id = service
+        .create_managed_session("workspace".into(), "repo".into(), "codex".into(), None)
+        .await
+        .unwrap();
+
+    service
+        .send_user_message(&session_id, "/goal Finish slash command support".into())
+        .await
+        .unwrap();
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let captured = tokio::fs::read_to_string(captured_path).await.unwrap();
+    assert!(captured.contains(r#""method":"thread/goal/set""#));
+    assert!(captured.contains(r#""objective":"Finish slash command support""#));
+    assert!(!captured.contains(r#""method":"turn/start""#));
+
+    let snapshot = service.load_snapshot(&session_id).await.unwrap();
+    assert!(snapshot
+        .events
+        .iter()
+        .any(|event| event.event_type == "assistant.message"
+            && event.payload_json.contains("Goal set")
+            && event.payload_json.contains("Finish slash command support")));
+}
+
+#[tokio::test]
 async fn managed_codex_session_recovers_after_service_restart_and_resumes_thread() {
     let dir = tempdir().unwrap();
     let db_path = dir.path().join("agent-dock.sqlite3");
@@ -233,4 +330,45 @@ async fn managed_codex_session_recovers_after_service_restart_and_resumes_thread
                 && event.payload_json.contains("second-reply"))
     );
     assert_eq!(recorded.lock().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn managed_codex_session_can_resume_runtime_without_sending_message() {
+    let store = SqliteSessionStore::in_memory().await.unwrap();
+    let spawner = Arc::new(|_command: LaunchCommand| {
+        spawn_command(LaunchCommand {
+            program: "sh".into(),
+            args: vec![
+                "-lc".into(),
+                "IFS= read -r _init; printf '%s\n' '{\"jsonrpc\":\"2.0\",\"id\":\"agent-dock-initialize-1\",\"result\":{}}'; \
+                 IFS= read -r _resume; printf '%s\n' '{\"jsonrpc\":\"2.0\",\"id\":\"agent-dock-thread-resume-2\",\"result\":{\"thread\":{\"id\":\"thread-1\"}}}'; \
+                 printf '%s\n' '{\"jsonrpc\":\"2.0\",\"method\":\"thread/status/changed\",\"params\":{\"status\":{\"type\":\"active\"},\"threadId\":\"thread-1\"}}'; \
+                 sleep 1".into(),
+            ],
+        })
+    });
+
+    let service = SessionService::new_with_spawner(store, spawner);
+    let session_id = service
+        .attach_existing_session(
+            "workspace".into(),
+            "repo".into(),
+            "codex".into(),
+            "thread-1".into(),
+        )
+        .await
+        .unwrap();
+
+    service.resume_session(&session_id).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let snapshot = service.load_snapshot(&session_id).await.unwrap();
+    assert_eq!(snapshot.session.status, "running");
+    assert!(snapshot.events.iter().any(|event| {
+        event.event_type == "session.status.changed" && event.payload_json.contains("active")
+    }));
+    assert!(!snapshot
+        .events
+        .iter()
+        .any(|event| event.event_type == "user.message"));
 }

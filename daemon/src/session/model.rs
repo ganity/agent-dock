@@ -36,3 +36,13 @@ pub struct SessionSnapshot {
     pub events: Vec<StoredEvent>,
     pub has_more_history: bool,
 }
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ResumeCandidate {
+    pub runtime_session_id: String,
+    pub title: Option<String>,
+    pub agent_kind: String,
+    pub workspace_path: String,
+    pub updated_at: Option<String>,
+    pub status: Option<String>,
+}

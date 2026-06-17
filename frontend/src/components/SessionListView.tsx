@@ -1,11 +1,16 @@
 import { useState } from "react";
 
 import { getSessionTitle } from "../sessionDisplay";
-import type { SessionSummary } from "../types";
+import type { AdminUser, CurrentUser, SessionSummary } from "../types";
 
 export function SessionListView(props: {
+  currentUser: CurrentUser | null;
   hasRoots: boolean;
   sessions: SessionSummary[];
+  users: AdminUser[];
+  onCreateUser: (input: { username: string; password: string; isAdmin: boolean }) => Promise<void>;
+  onResetPassword: (userId: string, password: string) => Promise<void>;
+  onDeleteUser: (userId: string) => Promise<void>;
   onCreate: () => void;
   onAttach: () => void;
   onSelect: (sessionId: string) => void;
@@ -13,12 +18,20 @@ export function SessionListView(props: {
   deletingSessionId?: string | null;
 }) {
   const [menuSessionId, setMenuSessionId] = useState<string | null>(null);
+  const [newUsername, setNewUsername] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [adminActionError, setAdminActionError] = useState<string | null>(null);
 
   return (
     <section className="session-home">
       <header className="session-home-header">
         <p className="eyebrow">Local control surface</p>
         <h1>Sessions</h1>
+        {props.currentUser?.isAdmin ? (
+          <a className="session-home-admin-link" href="#user-management">
+            User management
+          </a>
+        ) : null}
       </header>
 
       <div className="session-action-grid">
@@ -47,6 +60,116 @@ export function SessionListView(props: {
 
       {!props.hasRoots ? (
         <p className="session-root-warning">Add a workspace root before creating or attaching sessions.</p>
+      ) : null}
+
+      {props.currentUser?.isAdmin ? (
+        <section className="session-empty-card" id="user-management" aria-label="User management">
+          <h2>User management</h2>
+          <p>Manage daemon users from the web client.</p>
+          <div className="stack">
+            <label className="field">
+              <span>Username</span>
+              <input
+                aria-label="New username"
+                className="input"
+                value={newUsername}
+                onChange={(event) => setNewUsername(event.target.value)}
+              />
+            </label>
+            <label className="field">
+              <span>Password</span>
+              <input
+                aria-label="New password"
+                className="input"
+                type="password"
+                value={newPassword}
+                onChange={(event) => setNewPassword(event.target.value)}
+              />
+            </label>
+            <button
+              className="button"
+              type="button"
+              onClick={() => {
+                const username = newUsername.trim();
+                const password = newPassword.trim();
+
+                if (!username) {
+                  setAdminActionError("Username is required");
+                  return;
+                }
+
+                if (!password) {
+                  setAdminActionError("Password is required");
+                  return;
+                }
+
+                setAdminActionError(null);
+                void props
+                  .onCreateUser({
+                    username,
+                    password,
+                    isAdmin: false,
+                  })
+                  .then(() => {
+                    setNewUsername("");
+                    setNewPassword("");
+                  })
+                  .catch((error) => {
+                    setAdminActionError(error instanceof Error ? error.message : String(error));
+                  });
+              }}
+            >
+              Create user
+            </button>
+          </div>
+          {adminActionError ? <p className="form-error" role="alert">{adminActionError}</p> : null}
+          <ul aria-label="Users" className="session-card-list">
+            {props.users.map((user) => (
+              <li key={user.id}>
+                <div className="session-card-shell">
+                  <div className="session-card">
+                    <span className="session-card-main">
+                      <span className="session-card-title-row">
+                        <span className="session-card-title">{user.displayName}</span>
+                        {user.isAdmin ? <span className="session-chip session-chip-status">admin</span> : null}
+                      </span>
+                      <span className="session-card-path">{user.username}</span>
+                    </span>
+                  </div>
+                  <button
+                    className="session-card-menu-item"
+                    type="button"
+                    onClick={() => {
+                      const nextPassword = window.prompt(`New password for ${user.username}`, "");
+                      if (!nextPassword?.trim()) {
+                        return;
+                      }
+
+                      setAdminActionError(null);
+                      void props.onResetPassword(user.id, nextPassword.trim()).catch((error) => {
+                        setAdminActionError(error instanceof Error ? error.message : String(error));
+                      });
+                    }}
+                  >
+                    Reset password
+                  </button>
+                  <button
+                    className="session-card-menu-item"
+                    type="button"
+                    onClick={() => {
+                      setAdminActionError(null);
+                      void props.onDeleteUser(user.id).catch((error) => {
+                        setAdminActionError(error instanceof Error ? error.message : String(error));
+                      });
+                    }}
+                  >
+                    Delete user
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
       ) : null}
 
       {props.sessions.length === 0 ? (

@@ -4,12 +4,18 @@ import {
   connectSessionEvents,
   connectVoiceInput,
   createSession,
+  createUser,
+  deleteUser,
   deleteSession,
   fetchSessionSnapshot,
   listDirectories,
+  listResumeCandidates,
   listRoots,
   listSessions,
+  listUsers,
   login,
+  resetUserPassword,
+  resumeSession,
   restoreSession,
   sendSessionMessage,
   uploadSessionAttachment,
@@ -20,12 +26,14 @@ import { LoginView } from "./components/LoginView";
 import { SessionDetailView } from "./components/SessionDetailView";
 import { SessionListView } from "./components/SessionListView";
 import { getSessionTitle } from "./sessionDisplay";
-import type { SessionDetail, SessionEvent, SessionSummary, WorkspaceRoot } from "./types";
+import type { AdminUser, CurrentUser, SessionDetail, SessionEvent, SessionSummary, WorkspaceRoot } from "./types";
 
 export default function App() {
   const [authState, setAuthState] = useState<"checking" | "authenticated" | "anonymous">("checking");
+  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
   const [roots, setRoots] = useState<WorkspaceRoot[]>([]);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [users, setUsers] = useState<AdminUser[]>([]);
   const [selectedSession, setSelectedSession] = useState<SessionDetail | null>(null);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
@@ -39,14 +47,19 @@ export default function App() {
     return error instanceof Error ? error.message : String(error);
   }
 
-  async function refreshHomeData(): Promise<void> {
-    const [nextRoots, nextSessions] = await Promise.all([listRoots(), listSessions()]);
+  async function refreshHomeData(user: CurrentUser | null = currentUser): Promise<void> {
+    const [nextRoots, nextSessions, nextUsers] = await Promise.all([
+      listRoots(),
+      listSessions(),
+      user?.isAdmin ? listUsers() : Promise.resolve([]),
+    ]);
     setRoots(nextRoots);
     setSessions(nextSessions);
+    setUsers(nextUsers);
   }
 
-  function refreshHomeDataInBackground(): void {
-    void refreshHomeData().catch((error) => {
+  function refreshHomeDataInBackground(user: CurrentUser | null = currentUser): void {
+    void refreshHomeData(user).catch((error) => {
       window.alert(getErrorMessage(error));
     });
   }
@@ -54,11 +67,16 @@ export default function App() {
   useEffect(() => {
     void (async () => {
       try {
-        await restoreSession();
-        await refreshHomeData();
+        const user = await restoreSession();
+        setCurrentUser(user);
+        await refreshHomeData(user);
         setAuthState("authenticated");
         setLoginError(null);
       } catch {
+        setCurrentUser(null);
+        setRoots([]);
+        setSessions([]);
+        setUsers([]);
         setAuthState("anonymous");
       }
     })();
@@ -148,8 +166,21 @@ export default function App() {
         ) : (
           <section className="stack">
             <SessionListView
+              currentUser={currentUser}
               hasRoots={roots.length > 0}
               sessions={sessions}
+              users={users}
+              onCreateUser={async (input) => {
+                await createUser(input);
+                setUsers(await listUsers());
+              }}
+              onResetPassword={async (userId, password) => {
+                await resetUserPassword(userId, password);
+              }}
+              onDeleteUser={async (userId) => {
+                await deleteUser(userId);
+                setUsers(await listUsers());
+              }}
               onCreate={() => {
                 setShowAttachForm(false);
                 setAttachError(null);
@@ -166,7 +197,11 @@ export default function App() {
               }}
               onSelect={(sessionId) => {
                 void (async () => {
-                  const detail = await fetchSessionSnapshot(sessionId, { limit: 50 });
+                  const session = sessions.find((item) => item.id === sessionId);
+                  const detail =
+                    session?.status === "suspended"
+                      ? await resumeSession(sessionId)
+                      : await fetchSessionSnapshot(sessionId, { limit: 50 });
                   setLoadingHistory(false);
                   setSelectedSession(detail);
                 })();
@@ -226,7 +261,7 @@ export default function App() {
                 roots={roots}
                 error={attachError}
                 loadDirectories={listDirectories}
-                sessionCandidates={sessions}
+                loadResumeCandidates={listResumeCandidates}
                 onCancel={() => {
                   setShowAttachForm(false);
                   setAttachError(null);
@@ -252,11 +287,12 @@ export default function App() {
         <LoginView
           loading={false}
           error={loginError}
-          onSubmit={(pin) => {
+          onSubmit={({ username, password }) => {
             void (async () => {
               try {
-                await login(pin);
-                await refreshHomeData();
+                const user = await login(username, password);
+                setCurrentUser(user);
+                await refreshHomeData(user);
                 setAuthState("authenticated");
                 setLoginError(null);
               } catch (error) {

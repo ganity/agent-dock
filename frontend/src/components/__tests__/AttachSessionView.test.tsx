@@ -25,6 +25,7 @@ describe("AttachSessionView", () => {
         ]}
         error={null}
         loadDirectories={loadDirectories}
+        loadResumeCandidates={vi.fn().mockResolvedValue([])}
         onCancel={vi.fn()}
         onSubmit={onSubmit}
       />,
@@ -58,6 +59,7 @@ describe("AttachSessionView", () => {
         roots={[{ id: "workspace", label: "Workspace", path: "/tmp/workspace" }]}
         error={null}
         loadDirectories={loadDirectories}
+        loadResumeCandidates={vi.fn().mockResolvedValue([])}
         onCancel={vi.fn()}
         onSubmit={onSubmit}
       />,
@@ -86,6 +88,7 @@ describe("AttachSessionView", () => {
         roots={[{ id: "workspace", label: "Workspace", path: "/tmp/workspace" }]}
         error={null}
         loadDirectories={loadDirectories}
+        loadResumeCandidates={vi.fn().mockResolvedValue([])}
         onCancel={vi.fn()}
         onSubmit={onSubmit}
       />,
@@ -144,6 +147,7 @@ describe("AttachSessionView", () => {
         roots={[]}
         error="No workspace roots available."
         loadDirectories={loadDirectories}
+        loadResumeCandidates={vi.fn().mockResolvedValue([])}
         onCancel={vi.fn()}
         onSubmit={onSubmit}
       />,
@@ -159,31 +163,39 @@ describe("AttachSessionView", () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
-  it("lets the user pick an existing session candidate instead of typing the runtime session id", () => {
+  it("loads real resume candidates and lets the user pick one instead of typing the runtime session id", async () => {
     const onSubmit = vi.fn();
+    const loadResumeCandidates = vi.fn().mockResolvedValue([
+      {
+        runtimeSessionId: "thread-xyz",
+        title: "API Fixes",
+        agentKind: "codex",
+        workspacePath: "/tmp/workspace/apps/api",
+        status: "idle",
+      },
+    ]);
 
     render(
       <AttachSessionView
         roots={[{ id: "workspace", label: "Workspace", path: "/tmp/workspace" }]}
-        sessionCandidates={[
-          {
-            id: "sess-2",
-            title: "API Fixes",
-            agentKind: "codex",
-            sourceKind: "managed",
-            runtimeSessionId: "thread-xyz",
-            workspacePath: "/tmp/workspace/apps/api",
-            status: "running",
-          },
-        ]}
         error={null}
         loadDirectories={loadDirectories}
+        loadResumeCandidates={loadResumeCandidates}
         onCancel={vi.fn()}
         onSubmit={onSubmit}
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /Use API Fixes/i }));
+    fireEvent.change(screen.getByLabelText("Path"), { target: { value: "/tmp/workspace/apps/api" } });
+    fireEvent.click(screen.getByRole("button", { name: "Load resume sessions" }));
+
+    expect(loadResumeCandidates).toHaveBeenCalledWith({
+      rootId: "workspace",
+      agentKind: "codex",
+      path: "/tmp/workspace/apps/api",
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: /Use API Fixes/i }));
 
     expect(screen.getByLabelText("Runtime session ID")).toHaveValue("thread-xyz");
     expect(screen.getByLabelText("Path")).toHaveValue("/tmp/workspace/apps/api");

@@ -30,10 +30,32 @@ vi.mock("./api", () => ({
       { name: "repo", path: "/tmp/workspace/repo" },
     ],
   }),
+  listResumeCandidates: vi.fn().mockResolvedValue([]),
+  resumeSession: vi.fn().mockResolvedValue({
+    id: "sess-1",
+    title: "Launch Pad",
+    agentKind: "codex",
+    sourceKind: "managed",
+    workspacePath: "apps/api",
+    status: "running",
+    hasMoreHistory: false,
+    events: [{ id: 1, eventType: "session.status.changed", payload: { status: "running" } }],
+  }),
   restoreSession: vi.fn().mockRejectedValue(new Error("UNAUTHORIZED")),
-  login: vi.fn().mockResolvedValue(undefined),
+  login: vi.fn().mockResolvedValue({ id: "usr_workspace", displayName: "Agent Dock", isAdmin: true }),
   listRoots: vi.fn().mockResolvedValue([{ id: "workspace", label: "Workspace", path: "/tmp/workspace" }]),
   listSessions: vi.fn().mockResolvedValue([]),
+  listUsers: vi.fn().mockResolvedValue([
+    { id: "usr_workspace", username: "admin", displayName: "Agent Dock", isAdmin: true },
+  ]),
+  createUser: vi.fn().mockResolvedValue({
+    id: "usr_alice",
+    username: "alice",
+    displayName: "Alice",
+    isAdmin: false,
+  }),
+  resetUserPassword: vi.fn().mockResolvedValue(undefined),
+  deleteUser: vi.fn().mockResolvedValue(undefined),
   deleteSession: vi.fn().mockResolvedValue(undefined),
   connectVoiceInput: vi.fn(),
   createSession: vi.fn().mockResolvedValue({
@@ -67,12 +89,18 @@ import {
   connectSessionEvents,
   connectVoiceInput,
   createSession,
+  createUser,
   deleteSession,
+  deleteUser,
   fetchSessionSnapshot,
   listDirectories,
+  listResumeCandidates,
   listRoots,
   listSessions,
+  listUsers,
   login,
+  resetUserPassword,
+  resumeSession,
   restoreSession,
   sendSessionMessage,
   uploadSessionAttachment,
@@ -82,9 +110,21 @@ afterEach(() => {
   cleanup();
   vi.clearAllMocks();
   vi.mocked(restoreSession).mockRejectedValue(new Error("UNAUTHORIZED"));
+  vi.mocked(login).mockResolvedValue({ id: "usr_workspace", displayName: "Agent Dock", isAdmin: true });
   vi.mocked(listRoots).mockResolvedValue([{ id: "workspace", label: "Workspace", path: "/tmp/workspace" }]);
   vi.mocked(listSessions).mockResolvedValue([]);
+  vi.mocked(listUsers).mockResolvedValue([
+    { id: "usr_workspace", username: "admin", displayName: "Agent Dock", isAdmin: true },
+  ]);
   vi.mocked(deleteSession).mockResolvedValue(undefined);
+  vi.mocked(createUser).mockResolvedValue({
+    id: "usr_alice",
+    username: "alice",
+    displayName: "Alice",
+    isAdmin: false,
+  });
+  vi.mocked(resetUserPassword).mockResolvedValue(undefined);
+  vi.mocked(deleteUser).mockResolvedValue(undefined);
   vi.mocked(connectVoiceInput).mockReturnValue({ close: vi.fn() } as unknown as WebSocket);
   vi.mocked(createSession).mockResolvedValue({
     id: "sess-1",
@@ -124,6 +164,17 @@ afterEach(() => {
       { name: "repo", path: "/tmp/workspace/repo" },
     ],
   });
+  vi.mocked(listResumeCandidates).mockResolvedValue([]);
+  vi.mocked(resumeSession).mockResolvedValue({
+    id: "sess-1",
+    title: "Launch Pad",
+    agentKind: "codex",
+    sourceKind: "managed",
+    workspacePath: "apps/api",
+    status: "running",
+    hasMoreHistory: false,
+    events: [{ id: 1, eventType: "session.status.changed", payload: { status: "running" } }],
+  });
   vi.mocked(uploadSessionAttachment).mockResolvedValue("/tmp/workspace/screenshot.png");
   liveSocket.onmessage = null;
   liveSocket.onerror = null;
@@ -131,7 +182,11 @@ afterEach(() => {
 
 describe("App", () => {
   it("restores an existing authenticated session on first render", async () => {
-    vi.mocked(restoreSession).mockResolvedValueOnce(undefined);
+    vi.mocked(restoreSession).mockResolvedValueOnce({
+      id: "usr_workspace",
+      displayName: "Agent Dock",
+      isAdmin: true,
+    });
     vi.mocked(listSessions).mockResolvedValueOnce([
       {
         id: "sess-1",
@@ -152,8 +207,9 @@ describe("App", () => {
     });
 
     expect(login).not.toHaveBeenCalled();
-    expect(screen.queryByLabelText("PIN")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Sign in" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Open Launch Pad" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "User management" })).toBeInTheDocument();
   });
 
   it("deletes a session from the list after confirmation", async () => {
@@ -172,11 +228,12 @@ describe("App", () => {
 
     render(<App />);
 
-    fireEvent.change(await screen.findByLabelText("PIN"), { target: { value: "1234" } });
-    fireEvent.click(screen.getByRole("button", { name: "Unlock" }));
+    fireEvent.change(await screen.findByLabelText("Username"), { target: { value: "admin" } });
+    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "1234" } });
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     await waitFor(() => {
-      expect(login).toHaveBeenCalledWith("1234");
+      expect(login).toHaveBeenCalledWith("admin", "1234");
       expect(listSessions).toHaveBeenCalledTimes(1);
     });
 
@@ -197,13 +254,15 @@ describe("App", () => {
   it("logs in, loads sessions, and appends a created session", async () => {
     render(<App />);
 
-    fireEvent.change(await screen.findByLabelText("PIN"), { target: { value: "1234" } });
-    fireEvent.click(screen.getByRole("button", { name: "Unlock" }));
+    fireEvent.change(await screen.findByLabelText("Username"), { target: { value: "admin" } });
+    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "1234" } });
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     await waitFor(() => {
-      expect(login).toHaveBeenCalledWith("1234");
+      expect(login).toHaveBeenCalledWith("admin", "1234");
       expect(listRoots).toHaveBeenCalledTimes(1);
       expect(listSessions).toHaveBeenCalledTimes(1);
+      expect(listUsers).toHaveBeenCalledTimes(1);
     });
 
     expect(screen.queryByLabelText("Agent")).not.toBeInTheDocument();
@@ -248,6 +307,18 @@ describe("App", () => {
       expect(screen.getAllByText("donelive")).not.toHaveLength(0);
     });
 
+    liveSocket.onmessage?.({
+      data: JSON.stringify({
+        id: 3,
+        eventType: "session.status.changed",
+        payload: { status: "suspended" },
+      }),
+    });
+
+    await waitFor(() => {
+      expect(document.querySelector(".session-status-pill")).toHaveTextContent("suspended");
+    });
+
     fireEvent.change(screen.getByLabelText("Message"), { target: { value: "next step" } });
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
@@ -270,8 +341,9 @@ describe("App", () => {
 
     render(<App />);
 
-    fireEvent.change(await screen.findByLabelText("PIN"), { target: { value: "1234" } });
-    fireEvent.click(screen.getByRole("button", { name: "Unlock" }));
+    fireEvent.change(await screen.findByLabelText("Username"), { target: { value: "admin" } });
+    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "1234" } });
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     await waitFor(() => {
       expect(listSessions).toHaveBeenCalledTimes(1);
@@ -282,6 +354,50 @@ describe("App", () => {
     await waitFor(() => {
       expect(fetchSessionSnapshot).toHaveBeenCalledWith("sess-1", { limit: 50 });
     });
+  });
+
+  it("resumes a suspended session before opening details", async () => {
+    vi.mocked(listSessions).mockResolvedValueOnce([
+      {
+        id: "sess-1",
+        title: "Launch Pad",
+        agentKind: "codex",
+        sourceKind: "managed",
+        workspacePath: "apps/api",
+        runtimeSessionId: "thread-1",
+        status: "suspended",
+      },
+    ]);
+    vi.mocked(resumeSession).mockResolvedValueOnce({
+      id: "sess-1",
+      title: "Launch Pad",
+      agentKind: "codex",
+      sourceKind: "managed",
+      workspacePath: "apps/api",
+      runtimeSessionId: "thread-1",
+      status: "running",
+      hasMoreHistory: false,
+      events: [{ id: 7, eventType: "session.status.changed", payload: { status: "running" } }],
+    });
+
+    render(<App />);
+
+    fireEvent.change(await screen.findByLabelText("Username"), { target: { value: "admin" } });
+    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "1234" } });
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+    await waitFor(() => {
+      expect(listSessions).toHaveBeenCalledTimes(1);
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Open Launch Pad" }));
+
+    await waitFor(() => {
+      expect(resumeSession).toHaveBeenCalledWith("sess-1");
+    });
+    expect(fetchSessionSnapshot).not.toHaveBeenCalledWith("sess-1", { limit: 50 });
+    expect(await screen.findByRole("button", { name: "Session details" })).toBeInTheDocument();
+    expect(connectSessionEvents).toHaveBeenCalledWith("sess-1", 7);
   });
 
   it("refreshes the session list when returning from a session detail", async () => {
@@ -317,8 +433,9 @@ describe("App", () => {
 
     render(<App />);
 
-    fireEvent.change(await screen.findByLabelText("PIN"), { target: { value: "1234" } });
-    fireEvent.click(screen.getByRole("button", { name: "Unlock" }));
+    fireEvent.change(await screen.findByLabelText("Username"), { target: { value: "admin" } });
+    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "1234" } });
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     await waitFor(() => {
       expect(listSessions).toHaveBeenCalledTimes(1);
@@ -336,34 +453,37 @@ describe("App", () => {
     expect(screen.getByText("idle")).toBeInTheDocument();
   });
 
-  it("refreshes session candidates when opening the attach menu", async () => {
-    vi.mocked(listSessions)
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([
-        {
-          id: "sess-2",
-          title: "Fresh Session",
-          agentKind: "claude",
-          sourceKind: "attached",
-          runtimeSessionId: "thread-fresh",
-          workspacePath: "apps/fresh",
-          status: "running",
-        },
-      ]);
-
+  it("loads resume candidates from the agent when requested in the attach menu", async () => {
+    vi.mocked(listResumeCandidates).mockResolvedValueOnce([
+      {
+        title: "Fresh Session",
+        agentKind: "claude",
+        runtimeSessionId: "thread-fresh",
+        workspacePath: "/tmp/workspace/apps/fresh",
+        status: "idle",
+      },
+    ]);
     render(<App />);
 
-    fireEvent.change(await screen.findByLabelText("PIN"), { target: { value: "1234" } });
-    fireEvent.click(screen.getByRole("button", { name: "Unlock" }));
+    fireEvent.change(await screen.findByLabelText("Username"), { target: { value: "admin" } });
+    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "1234" } });
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     await waitFor(() => {
       expect(listSessions).toHaveBeenCalledTimes(1);
     });
 
     fireEvent.click(screen.getByRole("button", { name: /^Attach$/i }));
+    fireEvent.change(screen.getByLabelText("Agent"), { target: { value: "claude" } });
+    fireEvent.change(screen.getByLabelText("Path"), { target: { value: "/tmp/workspace/apps/fresh" } });
+    fireEvent.click(screen.getByRole("button", { name: "Load resume sessions" }));
 
     await waitFor(() => {
-      expect(listSessions).toHaveBeenCalledTimes(2);
+      expect(listResumeCandidates).toHaveBeenCalledWith({
+        rootId: "workspace",
+        agentKind: "claude",
+        path: "/tmp/workspace/apps/fresh",
+      });
     });
     expect(await screen.findByRole("button", { name: "Use Fresh Session" })).toBeInTheDocument();
   });
@@ -378,8 +498,9 @@ describe("App", () => {
 
     render(<App />);
 
-    fireEvent.change(await screen.findByLabelText("PIN"), { target: { value: "1234" } });
-    fireEvent.click(screen.getByRole("button", { name: "Unlock" }));
+    fireEvent.change(await screen.findByLabelText("Username"), { target: { value: "admin" } });
+    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "1234" } });
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     await waitFor(() => {
       expect(listRoots).toHaveBeenCalledTimes(1);
@@ -399,8 +520,9 @@ describe("App", () => {
 
     render(<App />);
 
-    fireEvent.change(await screen.findByLabelText("PIN"), { target: { value: "1234" } });
-    fireEvent.click(screen.getByRole("button", { name: "Unlock" }));
+    fireEvent.change(await screen.findByLabelText("Username"), { target: { value: "admin" } });
+    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "1234" } });
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     await waitFor(() => {
       expect(listSessions).toHaveBeenCalledTimes(1);
@@ -419,11 +541,12 @@ describe("App", () => {
   it("uploads selected images and sends returned image paths with the message", async () => {
     render(<App />);
 
-    fireEvent.change(await screen.findByLabelText("PIN"), { target: { value: "1234" } });
-    fireEvent.click(screen.getByRole("button", { name: "Unlock" }));
+    fireEvent.change(await screen.findByLabelText("Username"), { target: { value: "admin" } });
+    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "1234" } });
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     await waitFor(() => {
-      expect(login).toHaveBeenCalledWith("1234");
+      expect(login).toHaveBeenCalledWith("admin", "1234");
     });
 
     fireEvent.click(screen.getByRole("button", { name: /^New$/i }));
@@ -454,26 +577,25 @@ describe("App", () => {
     });
   });
 
-  it("opens the attach form and attaches an existing session", async () => {
-    vi.mocked(listSessions).mockResolvedValueOnce([
+  it("opens the attach form and attaches a selected real resume candidate", async () => {
+    vi.mocked(listResumeCandidates).mockResolvedValueOnce([
       {
-        id: "sess-2",
         title: null,
         agentKind: "claude",
-        sourceKind: "attached",
         runtimeSessionId: "thread-abc",
         workspacePath: "apps/web",
-        status: "running",
+        status: "idle",
       },
     ]);
 
     render(<App />);
 
-    fireEvent.change(await screen.findByLabelText("PIN"), { target: { value: "1234" } });
-    fireEvent.click(screen.getByRole("button", { name: "Unlock" }));
+    fireEvent.change(await screen.findByLabelText("Username"), { target: { value: "admin" } });
+    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "1234" } });
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     await waitFor(() => {
-      expect(login).toHaveBeenCalledWith("1234");
+      expect(login).toHaveBeenCalledWith("admin", "1234");
       expect(listRoots).toHaveBeenCalledTimes(1);
       expect(listSessions).toHaveBeenCalledTimes(1);
     });
@@ -482,7 +604,10 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: /^Attach$/i }));
     const dialog = screen.getByRole("dialog", { name: "Attach session" });
 
-    fireEvent.click(within(dialog).getByRole("button", { name: /Use web/i }));
+    fireEvent.change(within(dialog).getByLabelText("Agent"), { target: { value: "claude" } });
+    fireEvent.change(within(dialog).getByLabelText("Path"), { target: { value: "apps/web" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Load resume sessions" }));
+    fireEvent.click(await within(dialog).findByRole("button", { name: /Use web/i }));
     fireEvent.click(within(dialog).getByRole("button", { name: "Attach session" }));
 
     await waitFor(() => {
@@ -504,11 +629,12 @@ describe("App", () => {
 
     render(<App />);
 
-    fireEvent.change(await screen.findByLabelText("PIN"), { target: { value: "1234" } });
-    fireEvent.click(screen.getByRole("button", { name: "Unlock" }));
+    fireEvent.change(await screen.findByLabelText("Username"), { target: { value: "admin" } });
+    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "1234" } });
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     await waitFor(() => {
-      expect(login).toHaveBeenCalledWith("1234");
+      expect(login).toHaveBeenCalledWith("admin", "1234");
       expect(listRoots).toHaveBeenCalledTimes(1);
       expect(listSessions).toHaveBeenCalledTimes(1);
     });
@@ -538,11 +664,12 @@ describe("App", () => {
 
     render(<App />);
 
-    fireEvent.change(await screen.findByLabelText("PIN"), { target: { value: "1234" } });
-    fireEvent.click(screen.getByRole("button", { name: "Unlock" }));
+    fireEvent.change(await screen.findByLabelText("Username"), { target: { value: "admin" } });
+    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "1234" } });
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     await waitFor(() => {
-      expect(login).toHaveBeenCalledWith("1234");
+      expect(login).toHaveBeenCalledWith("admin", "1234");
       expect(listRoots).toHaveBeenCalledTimes(1);
       expect(listSessions).toHaveBeenCalledTimes(1);
     });
@@ -575,11 +702,12 @@ describe("App", () => {
 
     render(<App />);
 
-    fireEvent.change(await screen.findByLabelText("PIN"), { target: { value: "1234" } });
-    fireEvent.click(screen.getByRole("button", { name: "Unlock" }));
+    fireEvent.change(await screen.findByLabelText("Username"), { target: { value: "admin" } });
+    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "1234" } });
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     await waitFor(() => {
-      expect(login).toHaveBeenCalledWith("1234");
+      expect(login).toHaveBeenCalledWith("admin", "1234");
     });
 
     fireEvent.click(screen.getByRole("button", { name: /^New$/i }));
@@ -595,5 +723,22 @@ describe("App", () => {
 
     expect(within(attachDialog).queryByText("Create exploded")).not.toBeInTheDocument();
     expect(screen.queryByRole("dialog", { name: "New session" })).not.toBeInTheDocument();
+  });
+
+  it("shows the admin-only user management panel after an admin login", async () => {
+    render(<App />);
+
+    fireEvent.change(await screen.findByLabelText("Username"), { target: { value: "admin" } });
+    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "1234" } });
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+    await waitFor(() => {
+      expect(login).toHaveBeenCalledWith("admin", "1234");
+      expect(listUsers).toHaveBeenCalledTimes(1);
+    });
+
+    expect(await screen.findByRole("region", { name: "User management" })).toBeInTheDocument();
+    expect(screen.getByText("Agent Dock")).toBeInTheDocument();
+    expect(screen.getAllByText("admin").length).toBeGreaterThan(0);
   });
 });

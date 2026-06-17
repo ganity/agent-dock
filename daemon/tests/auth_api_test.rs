@@ -6,23 +6,15 @@ use tower::ServiceExt;
 use agent_dock_daemon::{
     app::build_router,
     config::{AppConfig, VoiceInputConfig, WorkspaceRoot},
+    session::store::SqliteSessionStore,
 };
 
 #[tokio::test]
-async fn login_unlocks_workspace_root_listing() {
+async fn pin_only_login_is_rejected() {
     let temp = TempDir::new().unwrap();
-    let app = build_router(test_config(&temp)).await;
-
-    let unauthenticated = app
-        .clone()
-        .oneshot(Request::builder().uri("/api/workspaces/roots").body(Body::empty()).unwrap())
-        .await
-        .unwrap();
-
-    assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
+    let app = build_router(test_config(&temp)).await.unwrap();
 
     let login = app
-        .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
@@ -33,6 +25,24 @@ async fn login_unlocks_workspace_root_listing() {
         )
         .await
         .unwrap();
+
+    assert_eq!(login.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn username_password_login_unlocks_workspace_root_listing() {
+    let temp = TempDir::new().unwrap();
+    let app = build_router(test_config(&temp)).await.unwrap();
+
+    let unauthenticated = app
+        .clone()
+        .oneshot(Request::builder().uri("/api/workspaces/roots").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+
+    assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
+
+    let login = login_as(app.clone(), "admin", "1234").await;
 
     assert_eq!(login.status(), StatusCode::OK);
 
@@ -61,7 +71,7 @@ async fn login_unlocks_workspace_root_listing() {
 #[tokio::test]
 async fn auth_session_reports_current_cookie_state() {
     let temp = TempDir::new().unwrap();
-    let app = build_router(test_config(&temp)).await;
+    let app = build_router(test_config(&temp)).await.unwrap();
 
     let unauthenticated = app
         .clone()
@@ -71,18 +81,7 @@ async fn auth_session_reports_current_cookie_state() {
 
     assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
 
-    let login = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/auth/login")
-                .header("content-type", "application/json")
-                .body(Body::from(r#"{"pin":"1234"}"#))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let login = login_as(app.clone(), "admin", "1234").await;
 
     assert_eq!(login.status(), StatusCode::OK);
 
@@ -105,26 +104,16 @@ async fn auth_session_reports_current_cookie_state() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["ok"].as_bool(), Some(true));
     assert_eq!(json["user"]["id"].as_str(), Some("usr_workspace"));
-    assert_eq!(json["user"]["displayName"].as_str(), Some("Agent Dock"));
+    assert_eq!(json["user"]["displayName"].as_str(), Some("Admin"));
+    assert_eq!(json["user"]["isAdmin"].as_bool(), Some(true));
 }
 
 #[tokio::test]
 async fn login_sets_agent_dock_cookie_and_auth_session_accepts_legacy_cookie_name() {
     let temp = TempDir::new().unwrap();
-    let app = build_router(test_config(&temp)).await;
+    let app = build_router(test_config(&temp)).await.unwrap();
 
-    let login = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/auth/login")
-                .header("content-type", "application/json")
-                .body(Body::from(r#"{"pin":"1234"}"#))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let login = login_as(app.clone(), "admin", "1234").await;
 
     assert_eq!(login.status(), StatusCode::OK);
     let cookie = login.headers().get("set-cookie").unwrap().to_str().unwrap().to_string();
@@ -150,24 +139,11 @@ async fn login_sets_agent_dock_cookie_and_auth_session_accepts_legacy_cookie_nam
 }
 
 #[tokio::test]
-async fn mobile_login_returns_bearer_token_current_user_and_bootstrap() {
+async fn login_returns_bearer_token_current_user_and_bootstrap() {
     let temp = TempDir::new().unwrap();
-    let app = build_router(test_config(&temp)).await;
+    let app = build_router(test_config(&temp)).await.unwrap();
 
-    let login = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/auth/login")
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    r#"{"username":"workspace","password":"1234"}"#,
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let login = login_as(app.clone(), "admin", "1234").await;
 
     assert_eq!(login.status(), StatusCode::OK);
     assert!(login.headers().get("set-cookie").is_some());
@@ -177,7 +153,8 @@ async fn mobile_login_returns_bearer_token_current_user_and_bootstrap() {
     let token = login_json["token"].as_str().expect("login should return token");
     assert_eq!(login_json["ok"].as_bool(), Some(true));
     assert_eq!(login_json["user"]["id"].as_str(), Some("usr_workspace"));
-    assert_eq!(login_json["user"]["displayName"].as_str(), Some("Workspace"));
+    assert_eq!(login_json["user"]["displayName"].as_str(), Some("Admin"));
+    assert_eq!(login_json["user"]["isAdmin"].as_bool(), Some(true));
 
     let roots = app
         .clone()
@@ -210,6 +187,7 @@ async fn mobile_login_returns_bearer_token_current_user_and_bootstrap() {
     let auth_json: serde_json::Value = serde_json::from_slice(&auth_body).unwrap();
     assert_eq!(auth_json["ok"].as_bool(), Some(true));
     assert_eq!(auth_json["user"]["id"].as_str(), Some("usr_workspace"));
+    assert_eq!(auth_json["user"]["isAdmin"].as_bool(), Some(true));
 
     let bootstrap = app
         .oneshot(
@@ -227,6 +205,7 @@ async fn mobile_login_returns_bearer_token_current_user_and_bootstrap() {
     let bootstrap_json: serde_json::Value = serde_json::from_slice(&bootstrap_body).unwrap();
     assert_eq!(bootstrap_json["daemonVersion"].as_str(), Some(env!("CARGO_PKG_VERSION")));
     assert_eq!(bootstrap_json["user"]["id"].as_str(), Some("usr_workspace"));
+    assert_eq!(bootstrap_json["user"]["isAdmin"].as_bool(), Some(true));
     assert_eq!(bootstrap_json["roots"].as_array().unwrap().len(), 1);
     assert_eq!(bootstrap_json["sessions"].as_array().unwrap().len(), 0);
     assert_eq!(
@@ -253,22 +232,10 @@ async fn mobile_bootstrap_returns_provider_voice_credentials_when_configured() {
         }),
         ..AppConfig::for_tests()
     })
-    .await;
+    .await
+    .unwrap();
 
-    let login = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/auth/login")
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    r#"{"username":"workspace","password":"1234"}"#,
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let login = login_as(app.clone(), "admin", "1234").await;
 
     assert_eq!(login.status(), StatusCode::OK);
 
@@ -312,15 +279,119 @@ async fn mobile_bootstrap_returns_provider_voice_credentials_when_configured() {
     );
 }
 
-fn test_config(temp: &TempDir) -> AppConfig {
-    AppConfig {
+#[tokio::test]
+async fn same_user_sees_persisted_sessions_after_router_rebuild() {
+    let temp = TempDir::new().unwrap();
+    let config = test_config(&temp);
+    let first_app = build_router(config.clone()).await.unwrap();
+
+    let login = login_as(first_app.clone(), "admin", "1234").await;
+    let login_body = to_bytes(login.into_body(), usize::MAX).await.unwrap();
+    let login_json: serde_json::Value = serde_json::from_slice(&login_body).unwrap();
+    let token = login_json["token"].as_str().unwrap();
+
+    let create = first_app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/sessions")
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"rootId":"workspace","path":"apps/api","agentKind":"codex","title":"Launch Pad"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(create.status(), StatusCode::OK);
+
+    let reopened_app = build_router(config).await.unwrap();
+    let reopened_login = login_as(reopened_app.clone(), "admin", "1234").await;
+    let reopened_body = to_bytes(reopened_login.into_body(), usize::MAX).await.unwrap();
+    let reopened_json: serde_json::Value = serde_json::from_slice(&reopened_body).unwrap();
+    let reopened_token = reopened_json["token"].as_str().unwrap();
+
+    let bootstrap = reopened_app
+        .oneshot(
+            Request::builder()
+                .uri("/api/mobile/bootstrap")
+                .header("authorization", format!("Bearer {reopened_token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(bootstrap.status(), StatusCode::OK);
+    let bootstrap_body = to_bytes(bootstrap.into_body(), usize::MAX).await.unwrap();
+    let bootstrap_json: serde_json::Value = serde_json::from_slice(&bootstrap_body).unwrap();
+    assert_eq!(bootstrap_json["sessions"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        bootstrap_json["sessions"][0]["title"].as_str(),
+        Some("Launch Pad"),
+    );
+}
+
+#[tokio::test]
+async fn legacy_agent_workspace_database_remains_visible_after_startup() {
+    let temp = TempDir::new().unwrap();
+    let legacy_db_path = temp.path().join("agent-workspace.sqlite3");
+    let legacy_store = SqliteSessionStore::from_path(&legacy_db_path).await.unwrap();
+    let session_id = legacy_store
+        .create_session(
+            "usr_workspace".into(),
+            "workspace".into(),
+            "repo".into(),
+            "managed".into(),
+            "codex".into(),
+            Some("Legacy Session".into()),
+        )
+        .await
+        .unwrap();
+    legacy_store
+        .append_event(&session_id, "session.created", r#"{"status":"created"}"#)
+        .await
+        .unwrap();
+    drop(legacy_store);
+
+    let app = build_router(AppConfig {
         database_path: temp
             .path()
             .join("agent-dock.sqlite3")
             .to_string_lossy()
             .into_owned(),
         ..AppConfig::for_tests()
-    }
+    })
+    .await
+    .unwrap();
+
+    let login = login_as(app.clone(), "admin", "1234").await;
+    let login_body = to_bytes(login.into_body(), usize::MAX).await.unwrap();
+    let login_json: serde_json::Value = serde_json::from_slice(&login_body).unwrap();
+    let token = login_json["token"].as_str().unwrap();
+
+    let bootstrap = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/mobile/bootstrap")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(bootstrap.status(), StatusCode::OK);
+    let bootstrap_body = to_bytes(bootstrap.into_body(), usize::MAX).await.unwrap();
+    let bootstrap_json: serde_json::Value = serde_json::from_slice(&bootstrap_body).unwrap();
+    assert_eq!(bootstrap_json["sessions"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        bootstrap_json["sessions"][0]["title"].as_str(),
+        Some("Legacy Session"),
+    );
 }
 
 #[tokio::test]
@@ -337,8 +408,6 @@ async fn login_unlocks_workspace_directory_listing() {
     std::fs::write(&note_path, "ignore me").unwrap();
 
     let app = build_router(AppConfig {
-        listen: "127.0.0.1:4123".into(),
-        pin: "1234".into(),
         database_path: temp_home
             .path()
             .join("agent-dock.sqlite3")
@@ -349,22 +418,12 @@ async fn login_unlocks_workspace_directory_listing() {
             label: "Workspace".into(),
             path: project_dir.to_string_lossy().into_owned(),
         }],
-        voice_input: None,
+        ..AppConfig::for_tests()
     })
-    .await;
+    .await
+    .unwrap();
 
-    let login = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/auth/login")
-                .header("content-type", "application/json")
-                .body(Body::from(r#"{"pin":"1234"}"#))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let login = login_as(app.clone(), "admin", "1234").await;
 
     let cookie = login.headers().get("set-cookie").unwrap().to_str().unwrap().to_string();
 
@@ -414,4 +473,34 @@ async fn login_unlocks_workspace_directory_listing() {
         .unwrap();
 
     assert_eq!(blocked.status(), StatusCode::BAD_REQUEST);
+}
+
+fn test_config(temp: &TempDir) -> AppConfig {
+    AppConfig {
+        database_path: temp
+            .path()
+            .join("agent-dock.sqlite3")
+            .to_string_lossy()
+            .into_owned(),
+        ..AppConfig::for_tests()
+    }
+}
+
+async fn login_as(app: axum::Router, username: &str, password: &str) -> axum::response::Response {
+    app.oneshot(
+        Request::builder()
+            .method("POST")
+            .uri("/api/auth/login")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::json!({
+                    "username": username,
+                    "password": password,
+                })
+                .to_string(),
+            ))
+            .unwrap(),
+    )
+    .await
+    .unwrap()
 }

@@ -4,14 +4,15 @@ import { describe, expect, it, vi } from "vitest";
 import { LoginView } from "../LoginView";
 
 describe("LoginView", () => {
-    it("submits the pin value", () => {
+    it("submits the username and password values", () => {
         const onSubmit = vi.fn();
 
         render(<LoginView loading={false} error={null} onSubmit={onSubmit} />);
 
-        fireEvent.change(screen.getByLabelText("PIN"), { target: { value: "1234" } });
-        fireEvent.click(screen.getByRole("button", { name: "Unlock" }));
+        fireEvent.change(screen.getByLabelText("Username"), { target: { value: "admin" } });
+        fireEvent.change(screen.getByLabelText("Password"), { target: { value: "1234" } });
+        fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
-        expect(onSubmit).toHaveBeenCalledWith("1234");
+        expect(onSubmit).toHaveBeenCalledWith({ username: "admin", password: "1234" });
     });
 });

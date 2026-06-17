@@ -15,9 +15,10 @@ use crate::{
         claude::{parse_claude_result_session_id, parse_claude_stream_line},
         codex_protocol::{CodexSessionProtocol, UserMessage},
         process::{claude_turn_launch, codex_managed_launch, spawn_command, LaunchCommand},
+        resume::{list_claude_resume_candidates, list_codex_resume_candidates},
     },
     session::{
-        model::{SessionSnapshot, SessionSummary, StoredEvent},
+        model::{ResumeCandidate, SessionSnapshot, SessionSummary, StoredEvent},
         store::SqliteSessionStore,
     },
 };
@@ -30,6 +31,7 @@ pub struct SessionService {
     store: Arc<SqliteSessionStore>,
     process_spawner: ProcessSpawner,
     attachment_root: Arc<PathBuf>,
+    claude_projects_root: Arc<Option<PathBuf>>,
     runtime_inputs: Arc<Mutex<HashMap<String, mpsc::UnboundedSender<String>>>>,
     codex_protocols: Arc<Mutex<HashMap<String, CodexSessionProtocol>>>,
     runtime_children: Arc<Mutex<HashMap<String, RuntimeChild>>>,
@@ -41,6 +43,7 @@ impl SessionService {
             store: Arc::new(store),
             process_spawner: Arc::new(spawn_command),
             attachment_root: Arc::new(PathBuf::from("./daemon-data/attachments")),
+            claude_projects_root: Arc::new(None),
             runtime_inputs: Arc::new(Mutex::new(HashMap::new())),
             codex_protocols: Arc::new(Mutex::new(HashMap::new())),
             runtime_children: Arc::new(Mutex::new(HashMap::new())),
@@ -52,6 +55,7 @@ impl SessionService {
             store: Arc::new(store),
             process_spawner,
             attachment_root: Arc::new(PathBuf::from("./daemon-data/attachments")),
+            claude_projects_root: Arc::new(None),
             runtime_inputs: Arc::new(Mutex::new(HashMap::new())),
             codex_protocols: Arc::new(Mutex::new(HashMap::new())),
             runtime_children: Arc::new(Mutex::new(HashMap::new())),
@@ -60,6 +64,11 @@ impl SessionService {
 
     pub fn with_attachment_root(mut self, attachment_root: PathBuf) -> Self {
         self.attachment_root = Arc::new(attachment_root);
+        self
+    }
+
+    pub fn with_claude_projects_root(mut self, claude_projects_root: Option<PathBuf>) -> Self {
+        self.claude_projects_root = Arc::new(claude_projects_root);
         self
     }
 
@@ -198,6 +207,27 @@ impl SessionService {
         Ok(snapshot.session.owner_user_id == owner_user_id)
     }
 
+    pub async fn list_resume_candidates(
+        &self,
+        agent_kind: &str,
+        workspace_path: &str,
+    ) -> anyhow::Result<Vec<ResumeCandidate>> {
+        match agent_kind {
+            "codex" => list_codex_resume_candidates(workspace_path, &*self.process_spawner).await,
+            "claude" => {
+                list_claude_resume_candidates(
+                    workspace_path,
+                    self.claude_projects_root
+                        .as_ref()
+                        .as_ref()
+                        .map(PathBuf::as_path),
+                )
+                .await
+            }
+            _ => Ok(Vec::new()),
+        }
+    }
+
     pub async fn delete_session(&self, session_id: &str) -> anyhow::Result<bool> {
         let sender = self.runtime_inputs.lock().unwrap().remove(session_id);
         drop(sender);
@@ -228,6 +258,38 @@ impl SessionService {
 
     pub async fn events_after(&self, session_id: &str, cursor: i64) -> anyhow::Result<Vec<StoredEvent>> {
         self.store.events_after(session_id, cursor).await
+    }
+
+    pub async fn resume_session(&self, session_id: &str) -> anyhow::Result<SessionSnapshot> {
+        let snapshot = self.store.load_snapshot(session_id).await?;
+
+        if snapshot.session.agent_kind == "codex"
+            && self.runtime_inputs.lock().unwrap().get(session_id).is_none()
+        {
+            let resume_thread_id = snapshot
+                .session
+                .runtime_session_id
+                .clone()
+                .or_else(|| find_latest_codex_thread_id(&snapshot.events));
+
+            if let Some(thread_id) = resume_thread_id {
+                if snapshot.session.runtime_session_id.as_deref() != Some(thread_id.as_str()) {
+                    self.store.update_runtime_session_id(session_id, &thread_id).await?;
+                }
+
+                self.spawn_attached_codex_runtime(
+                    session_id,
+                    &snapshot.session.workspace_path,
+                    thread_id,
+                )
+                .await?;
+            } else if snapshot.session.source_kind == "managed" {
+                self.spawn_codex_runtime(session_id, &snapshot.session.workspace_path)
+                    .await?;
+            }
+        }
+
+        self.store.load_snapshot(session_id).await
     }
 
     pub async fn store_image_attachment(
@@ -402,9 +464,9 @@ impl SessionService {
                 let _ = child.wait().await;
             }
             remove_runtime_child_if_current(&runtime_children, &session_id, &child_handle);
-            let _ = store.update_session_status(&session_id, "completed").await;
+            let _ = store.update_session_status(&session_id, "suspended").await;
             let _ = store
-                .append_event(&session_id, "session.status.changed", r#"{"status":"completed"}"#)
+                .append_event(&session_id, "session.status.changed", r#"{"status":"suspended"}"#)
                 .await;
         });
 

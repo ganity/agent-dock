@@ -275,6 +275,57 @@ void main() {
       );
     });
 
+    test(
+      'resumes a session with bearer auth and parses the recovered snapshot',
+      () async {
+        final transport = RecordingTransport(
+          responses: [
+            TransportResponse(
+              statusCode: 200,
+              body: jsonEncode({
+                'id': 'sess_1',
+                'title': 'Mobile migration',
+                'agentKind': 'codex',
+                'sourceKind': 'managed',
+                'runtimeSessionId': 'runtime_1',
+                'workspacePath': '/home/jhz/projects/agent-dock',
+                'status': 'running',
+                'hasMoreHistory': false,
+                'events': [
+                  {
+                    'id': 12,
+                    'eventType': 'session.status.changed',
+                    'payload': {'status': 'running'},
+                  },
+                ],
+              }),
+            ),
+          ],
+        );
+        final client = DaemonClient(
+          baseUrl: Uri.parse('https://daemon.example.com'),
+          transport: transport,
+        );
+
+        final snapshot = await client.resumeSession(
+          sessionId: 'sess_1',
+          token: 'tok_workspace',
+        );
+
+        expect(snapshot.status, 'running');
+        expect(snapshot.events.single.eventType, 'session.status.changed');
+        expect(transport.requests.single.method, 'POST');
+        expect(
+          transport.requests.single.url.path,
+          '/api/sessions/sess_1/resume',
+        );
+        expect(
+          transport.requests.single.headers['authorization'],
+          'Bearer tok_workspace',
+        );
+      },
+    );
+
     test('loads workspace directories with bearer auth', () async {
       final transport = RecordingTransport(
         responses: [
@@ -284,10 +335,7 @@ void main() {
               'currentPath': '/home/jhz/projects',
               'parentPath': '/home/jhz',
               'directories': [
-                {
-                  'name': 'agent-dock',
-                  'path': '/home/jhz/projects/agent-dock',
-                },
+                {'name': 'agent-dock', 'path': '/home/jhz/projects/agent-dock'},
               ],
             }),
           ),
@@ -306,10 +354,7 @@ void main() {
       expect(listing.currentPath, '/home/jhz/projects');
       expect(listing.parentPath, '/home/jhz');
       expect(listing.directories.single.name, 'agent-dock');
-      expect(
-        listing.directories.single.path,
-        '/home/jhz/projects/agent-dock',
-      );
+      expect(listing.directories.single.path, '/home/jhz/projects/agent-dock');
       expect(transport.requests.single.method, 'GET');
       expect(transport.requests.single.url.path, '/api/workspaces/directories');
       expect(transport.requests.single.url.queryParameters, {
@@ -603,43 +648,46 @@ void main() {
     });
   });
 
-  test('IoDaemonHttpTransport sends JSON request bodies with UTF-8 encoding', () async {
-    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-    addTearDown(server.close);
+  test(
+    'IoDaemonHttpTransport sends JSON request bodies with UTF-8 encoding',
+    () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(server.close);
 
-    final requestBody = Completer<List<int>>();
-    final contentType = Completer<String?>();
-    unawaited(() async {
-      final request = await server.first;
-      contentType.complete(request.headers.contentType?.toString());
-      final bytes = await request.fold<List<int>>(
-        <int>[],
-        (buffer, chunk) => buffer..addAll(chunk),
+      final requestBody = Completer<List<int>>();
+      final contentType = Completer<String?>();
+      unawaited(() async {
+        final request = await server.first;
+        contentType.complete(request.headers.contentType?.toString());
+        final bytes = await request.fold<List<int>>(
+          <int>[],
+          (buffer, chunk) => buffer..addAll(chunk),
+        );
+        requestBody.complete(bytes);
+        request.response
+          ..statusCode = 200
+          ..headers.contentType = ContentType.json
+          ..write(jsonEncode({'ok': true}));
+        await request.response.close();
+      }());
+
+      final transport = IoDaemonHttpTransport();
+      await transport.send(
+        TransportRequest(
+          method: 'POST',
+          url: Uri.parse('http://127.0.0.1:${server.port}/messages'),
+          headers: const {'content-type': 'application/json'},
+          body: jsonEncode({'message': '项目里面有什么', 'imagePaths': <String>[]}),
+        ),
       );
-      requestBody.complete(bytes);
-      request.response
-        ..statusCode = 200
-        ..headers.contentType = ContentType.json
-        ..write(jsonEncode({'ok': true}));
-      await request.response.close();
-    }());
 
-    final transport = IoDaemonHttpTransport();
-    await transport.send(
-      TransportRequest(
-        method: 'POST',
-        url: Uri.parse('http://127.0.0.1:${server.port}/messages'),
-        headers: const {'content-type': 'application/json'},
-        body: jsonEncode({'message': '项目里面有什么', 'imagePaths': <String>[]}),
-      ),
-    );
-
-    expect(utf8.decode(await requestBody.future), jsonEncode({
-      'message': '项目里面有什么',
-      'imagePaths': <String>[],
-    }));
-    expect(await contentType.future, 'application/json');
-  });
+      expect(
+        utf8.decode(await requestBody.future),
+        jsonEncode({'message': '项目里面有什么', 'imagePaths': <String>[]}),
+      );
+      expect(await contentType.future, 'application/json');
+    },
+  );
 }
 
 class RecordingTransport implements DaemonHttpTransport {

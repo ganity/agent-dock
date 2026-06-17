@@ -26,6 +26,9 @@ pub struct AppConfig {
     pub listen: String,
     pub pin: String,
     pub database_path: String,
+    pub bootstrap_admin_password: Option<String>,
+    #[serde(default)]
+    pub claude_projects_path: Option<String>,
     pub roots: Vec<WorkspaceRoot>,
     pub voice_input: Option<VoiceInputConfig>,
 }
@@ -45,6 +48,13 @@ impl AppConfig {
 
         if let Some(voice_input) = voice_input_from_env() {
             config.voice_input = Some(voice_input);
+        }
+
+        if let Ok(password) = env::var("AGENT_DOCK_BOOTSTRAP_ADMIN_PASSWORD") {
+            let password = password.trim().to_string();
+            if !password.is_empty() {
+                config.bootstrap_admin_password = Some(password);
+            }
         }
 
         Ok(config)
@@ -71,6 +81,8 @@ impl AppConfig {
             listen: "127.0.0.1:4123".into(),
             pin: "1234".into(),
             database_path: "./daemon-data/agent-dock.sqlite3".into(),
+            bootstrap_admin_password: Some("1234".into()),
+            claude_projects_path: None,
             roots: vec![WorkspaceRoot {
                 id: "workspace".into(),
                 label: "Workspace".into(),
@@ -101,6 +113,7 @@ mod tests {
 listen = "127.0.0.1:9999"
 pin = "1111"
 database_path = "./daemon-data/example.sqlite3"
+bootstrap_admin_password = "secret"
 
 [[roots]]
 id = "workspace"
@@ -116,6 +129,7 @@ path = "/tmp/example"
 listen = "127.0.0.1:5123"
 pin = "2468"
 database_path = "./daemon-data/local.sqlite3"
+bootstrap_admin_password = "secret"
 
 [voice_input]
 websocket_url = "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async"
@@ -141,6 +155,10 @@ path = "/Users/demo/workspace"
         assert_eq!(config.listen, "127.0.0.1:5123");
         assert_eq!(config.pin, "2468");
         assert_eq!(config.database_path, "./daemon-data/local.sqlite3");
+        assert_eq!(
+            config.bootstrap_admin_password.as_deref(),
+            Some("secret"),
+        );
         assert_eq!(config.roots.len(), 1);
         assert_eq!(config.roots[0].path, "/Users/demo/workspace");
         let voice_input = config.voice_input.expect("voice input should load from local config");
@@ -161,9 +179,10 @@ path = "/Users/demo/workspace"
         std::fs::write(
             &example_path,
             r#"
-listen = "127.0.0.1:4123"
+listen = "0.0.0.0:4123"
 pin = "1234"
 database_path = "./daemon-data/agent-dock.sqlite3"
+bootstrap_admin_password = "1234"
 
 [[roots]]
 id = "workspace"
@@ -179,8 +198,12 @@ path = "/tmp/workspace"
         ])
         .unwrap();
 
-        assert_eq!(config.listen, "127.0.0.1:4123");
+        assert_eq!(config.listen, "0.0.0.0:4123");
         assert_eq!(config.pin, "1234");
+        assert_eq!(
+            config.bootstrap_admin_password.as_deref(),
+            Some("1234"),
+        );
         assert!(config.voice_input.is_none());
     }
 }

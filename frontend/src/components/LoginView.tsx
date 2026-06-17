@@ -3,33 +3,44 @@ import { useState } from "react";
 export function LoginView(props: {
   loading: boolean;
   error: string | null;
-  onSubmit: (pin: string) => void;
+  onSubmit: (credentials: { username: string; password: string }) => void;
 }) {
-  const [pin, setPin] = useState("");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
 
   return (
     <form
       className="panel stack"
       onSubmit={(event) => {
         event.preventDefault();
-        props.onSubmit(pin);
+        props.onSubmit({ username, password });
       }}
     >
       <div className="stack">
         <h1>Agent Dock</h1>
-        <p className="muted">Unlock your local daemon with the device PIN.</p>
+        <p className="muted">Sign in to your local daemon with your username and password.</p>
       </div>
       <label className="field">
-        <span>PIN</span>
+        <span>Username</span>
         <input
-          aria-label="PIN"
+          aria-label="Username"
           className="input"
-          value={pin}
-          onChange={(event) => setPin(event.target.value)}
+          value={username}
+          onChange={(event) => setUsername(event.target.value)}
+        />
+      </label>
+      <label className="field">
+        <span>Password</span>
+        <input
+          aria-label="Password"
+          className="input"
+          type="password"
+          value={password}
+          onChange={(event) => setPassword(event.target.value)}
         />
       </label>
       <button className="button" type="submit" disabled={props.loading}>
-        Unlock
+        Sign in
       </button>
       {props.error ? <p>{props.error}</p> : null}
     </form>
