@@ -288,14 +288,16 @@ void main() {
                 'agentKind': 'codex',
                 'sourceKind': 'managed',
                 'runtimeSessionId': 'runtime_1',
-                'workspacePath': '/home/jhz/projects/agent-dock',
-                'status': 'running',
-                'hasMoreHistory': false,
-                'events': [
-                  {
-                    'id': 12,
-                    'eventType': 'session.status.changed',
-                    'payload': {'status': 'running'},
+              'runtimeHealth': 'recoverable_error',
+              'runtimeErrorMessage': 'temporary reconnect',
+              'workspacePath': '/home/jhz/projects/agent-dock',
+              'status': 'running',
+              'hasMoreHistory': true,
+              'events': [
+                {
+                  'id': 12,
+                  'eventType': 'session.status.changed',
+                  'payload': {'status': 'running'},
                   },
                 ],
               }),
@@ -313,6 +315,9 @@ void main() {
         );
 
         expect(snapshot.status, 'running');
+        expect(snapshot.runtimeHealth, 'recoverable_error');
+        expect(snapshot.runtimeErrorMessage, 'temporary reconnect');
+        expect(snapshot.hasMoreHistory, isTrue);
         expect(snapshot.events.single.eventType, 'session.status.changed');
         expect(transport.requests.single.method, 'POST');
         expect(
@@ -421,10 +426,18 @@ void main() {
       );
     });
 
-    test('sends a session message with bearer auth', () async {
+    test('sendMessage sends clientMessageId and parses ack response', () async {
       final transport = RecordingTransport(
         responses: [
-          TransportResponse(statusCode: 200, body: jsonEncode({'ok': true})),
+          TransportResponse(
+            statusCode: 200,
+            body: jsonEncode({
+              'accepted': true,
+              'clientMessageId': 'cli_1',
+              'eventId': 17,
+              'sessionStatus': 'running',
+            }),
+          ),
         ],
       );
       final client = DaemonClient(
@@ -432,12 +445,15 @@ void main() {
         transport: transport,
       );
 
-      await client.sendMessage(
+      final ack = await client.sendMessage(
         sessionId: 'sess_1',
         token: 'tok_workspace',
+        clientMessageId: 'cli_1',
         message: 'continue the Flutter work',
       );
 
+      expect(ack.clientMessageId, 'cli_1');
+      expect(ack.eventId, 17);
       expect(transport.requests.single.method, 'POST');
       expect(
         transport.requests.single.url.path,
@@ -452,6 +468,7 @@ void main() {
         'application/json',
       );
       expect(jsonDecode(transport.requests.single.body!), {
+        'clientMessageId': 'cli_1',
         'message': 'continue the Flutter work',
         'imagePaths': <String>[],
       });

@@ -1,6 +1,6 @@
 use agent_dock_daemon::adapters::codex_protocol::{
-    build_initialize_request, build_thread_resume_request, build_thread_start_request,
-    build_turn_start_request, parse_notification_event, CodexSessionProtocol, UserMessage,
+    CodexSessionProtocol, UserMessage, build_initialize_request, build_thread_resume_request,
+    build_thread_start_request, build_turn_start_request, parse_notification_event,
 };
 
 #[test]
@@ -131,6 +131,11 @@ fn protocol_bootstraps_thread_and_flushes_queued_messages() {
 
     let thread_response = r#"{"jsonrpc":"2.0","id":"agent-dock-thread-start-2","result":{"thread":{"id":"thread-1"}}}"#;
     let thread_result = protocol.handle_server_line(thread_response).unwrap();
+    assert_eq!(
+        thread_result.runtime_session_id.as_deref(),
+        Some("thread-1")
+    );
+    assert_eq!(thread_result.session_status.as_deref(), Some("running"));
     assert_eq!(thread_result.outgoing.len(), 1);
     assert_eq!(thread_result.outgoing[0]["method"], "turn/start");
     assert_eq!(thread_result.outgoing[0]["params"]["threadId"], "thread-1");
@@ -138,6 +143,107 @@ fn protocol_bootstraps_thread_and_flushes_queued_messages() {
         thread_result.outgoing[0]["params"]["input"][0]["text"],
         "hello world"
     );
+}
+
+#[test]
+fn protocol_accepts_only_one_user_message_until_turn_completes() {
+    let mut protocol = ready_protocol();
+
+    let first = protocol
+        .enqueue_user_message(UserMessage {
+            text: "first".into(),
+            image_paths: Vec::new(),
+        })
+        .unwrap();
+    let second = protocol
+        .enqueue_user_message(UserMessage {
+            text: "second".into(),
+            image_paths: Vec::new(),
+        })
+        .unwrap();
+
+    assert_eq!(first.len(), 1);
+    assert!(second.is_empty());
+    assert!(!protocol.can_accept_user_message());
+
+    let completed = protocol
+        .handle_server_line(
+            r#"{"jsonrpc":"2.0","method":"turn/completed","params":{"turnId":"turn-1","threadId":"thread-1","status":{"type":"completed"}}}"#,
+        )
+        .unwrap();
+
+    assert!(completed.can_accept_user_message);
+    assert!(protocol.can_accept_user_message());
+}
+
+#[test]
+fn protocol_ignores_notifications_for_other_threads() {
+    let mut protocol = ready_protocol();
+
+    let outgoing = protocol
+        .enqueue_user_message(UserMessage {
+            text: "first".into(),
+            image_paths: Vec::new(),
+        })
+        .unwrap();
+
+    assert_eq!(outgoing.len(), 1);
+    assert!(!protocol.can_accept_user_message());
+
+    let foreign = protocol
+        .handle_server_line(
+            r#"{"jsonrpc":"2.0","method":"turn/completed","params":{"turnId":"turn-foreign","threadId":"thread-foreign","status":{"type":"completed"}}}"#,
+        )
+        .unwrap();
+
+    assert!(foreign.event.is_none());
+    assert!(!foreign.completed_user_message);
+    assert!(!foreign.can_accept_user_message);
+    assert!(!protocol.can_accept_user_message());
+}
+
+#[test]
+fn protocol_only_completes_the_matching_in_flight_turn() {
+    let mut protocol = ready_protocol();
+
+    let outgoing = protocol
+        .enqueue_user_message(UserMessage {
+            text: "first".into(),
+            image_paths: Vec::new(),
+        })
+        .unwrap();
+
+    assert_eq!(outgoing.len(), 1);
+    assert!(!protocol.can_accept_user_message());
+
+    let started = protocol
+        .handle_server_line(
+            r#"{"jsonrpc":"2.0","method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-1"}}}"#,
+        )
+        .unwrap();
+    assert!(started.event.is_none());
+    assert!(!started.completed_user_message);
+
+    let foreign_completed = protocol
+        .handle_server_line(
+            r#"{"jsonrpc":"2.0","method":"turn/completed","params":{"turnId":"turn-2","threadId":"thread-1","status":{"type":"completed"}}}"#,
+        )
+        .unwrap();
+
+    assert!(foreign_completed.event.is_some());
+    assert!(!foreign_completed.completed_user_message);
+    assert!(!foreign_completed.can_accept_user_message);
+    assert!(!protocol.can_accept_user_message());
+
+    let matching_completed = protocol
+        .handle_server_line(
+            r#"{"jsonrpc":"2.0","method":"turn/completed","params":{"turnId":"turn-1","threadId":"thread-1","status":{"type":"completed"}}}"#,
+        )
+        .unwrap();
+
+    assert!(matching_completed.completed_user_message);
+    assert!(matching_completed.can_accept_user_message);
+    assert!(protocol.can_accept_user_message());
 }
 
 #[test]
@@ -164,9 +270,112 @@ fn attached_protocol_bootstraps_resume_and_flushes_queued_messages() {
 
     let thread_response = r#"{"jsonrpc":"2.0","id":"agent-dock-thread-resume-2","result":{"thread":{"id":"thread-1"}}}"#;
     let thread_result = protocol.handle_server_line(thread_response).unwrap();
+    assert_eq!(
+        thread_result.runtime_session_id.as_deref(),
+        Some("thread-1")
+    );
+    assert_eq!(thread_result.session_status.as_deref(), Some("running"));
     assert_eq!(thread_result.outgoing.len(), 1);
     assert_eq!(thread_result.outgoing[0]["method"], "turn/start");
     assert_eq!(thread_result.outgoing[0]["params"]["threadId"], "thread-1");
+}
+
+#[test]
+fn attached_protocol_falls_back_to_thread_start_when_resume_returns_no_thread_id() {
+    let mut protocol =
+        CodexSessionProtocol::new_attached("/tmp/workspace".into(), "thread-stale".into());
+
+    protocol.bootstrap_requests();
+    protocol
+        .enqueue_user_message(UserMessage {
+            text: "hello world".into(),
+            image_paths: Vec::new(),
+        })
+        .unwrap();
+
+    let init_response = r#"{"jsonrpc":"2.0","id":"agent-dock-initialize-1","result":{}}"#;
+    let init_result = protocol.handle_server_line(init_response).unwrap();
+    assert_eq!(init_result.outgoing[0]["method"], "thread/resume");
+
+    let resume_response =
+        r#"{"jsonrpc":"2.0","id":"agent-dock-thread-resume-2","result":{"thread":{}}}"#;
+    let resume_result = protocol.handle_server_line(resume_response).unwrap();
+    assert_eq!(resume_result.outgoing.len(), 1);
+    assert_eq!(resume_result.outgoing[0]["method"], "thread/start");
+    assert!(resume_result.runtime_session_id.is_none());
+
+    let start_response = r#"{"jsonrpc":"2.0","id":"agent-dock-thread-start-3","result":{"thread":{"id":"thread-fresh"}}}"#;
+    let start_result = protocol.handle_server_line(start_response).unwrap();
+    assert_eq!(
+        start_result.runtime_session_id.as_deref(),
+        Some("thread-fresh")
+    );
+    assert_eq!(start_result.outgoing.len(), 1);
+    assert_eq!(start_result.outgoing[0]["method"], "turn/start");
+    assert_eq!(
+        start_result.outgoing[0]["params"]["threadId"],
+        "thread-fresh"
+    );
+}
+
+#[test]
+fn protocol_only_marks_failed_after_failed_turn_completion() {
+    let mut protocol = ready_protocol();
+
+    let system_error = r#"{"jsonrpc":"2.0","method":"thread/status/changed","params":{"status":{"type":"systemError"},"threadId":"thread-1"}}"#;
+    let failed_turn = r#"{"jsonrpc":"2.0","method":"turn/completed","params":{"turnId":"turn-1","threadId":"thread-1","status":{"type":"failed","message":"compact exploded"}}}"#;
+
+    let system_error_result = protocol.handle_server_line(system_error).unwrap();
+    let failed_turn_result = protocol.handle_server_line(failed_turn).unwrap();
+
+    assert!(system_error_result.session_status.is_none());
+    assert_eq!(failed_turn_result.session_status.as_deref(), Some("failed"));
+    assert!(
+        failed_turn_result
+            .event
+            .unwrap()
+            .payload_json
+            .contains("compact exploded")
+    );
+}
+
+#[test]
+fn protocol_keeps_error_notifications_as_events_without_marking_session_dead() {
+    let mut protocol = ready_protocol();
+    let error = r#"{"jsonrpc":"2.0","method":"error","params":{"message":"temporary reconnect","willRetry":true,"threadId":"thread-1"}}"#;
+
+    let result = protocol.handle_server_line(error).unwrap();
+
+    assert!(result.runtime_session_id.is_none());
+    assert!(result.session_status.is_none());
+    let event = result.event.unwrap();
+    assert_eq!(event.event_type, "session.error");
+    assert!(event.payload_json.contains("temporary reconnect"));
+}
+
+#[test]
+fn protocol_marks_non_terminal_runtime_errors_as_recoverable_health() {
+    let mut protocol = ready_protocol();
+    let error = r#"{"jsonrpc":"2.0","method":"error","params":{"message":"temporary reconnect","willRetry":true,"threadId":"thread-1"}}"#;
+
+    let result = protocol.handle_server_line(error).unwrap();
+
+    assert_eq!(result.runtime_health.as_deref(), Some("recoverable_error"));
+    assert_eq!(
+        result
+            .runtime_error_kind
+            .as_ref()
+            .and_then(|kind| kind.as_deref()),
+        Some("transport")
+    );
+    assert_eq!(
+        result
+            .runtime_error_message
+            .as_ref()
+            .and_then(|message| message.as_deref()),
+        Some("temporary reconnect")
+    );
+    assert!(result.session_status.is_none());
 }
 
 #[test]
@@ -297,6 +506,59 @@ fn protocol_maps_command_errors_to_visible_assistant_messages() {
     assert_eq!(event.event_type, "assistant.message");
     assert!(event.payload_json.contains("Command failed"));
     assert!(event.payload_json.contains("thread is busy"));
+    assert_eq!(result.runtime_health.as_deref(), Some("recoverable_error"));
+    assert_eq!(
+        result
+            .runtime_error_kind
+            .as_ref()
+            .and_then(|kind| kind.as_deref()),
+        Some("runtime")
+    );
+    assert_eq!(
+        result
+            .runtime_error_message
+            .as_ref()
+            .and_then(|message| message.as_deref()),
+        Some("thread is busy")
+    );
+    assert!(result.session_status.is_none());
+}
+
+#[test]
+fn protocol_classifies_transport_and_provider_error_kinds() {
+    let mut protocol = ready_protocol();
+
+    let notification = protocol
+        .handle_server_line(
+            r#"{"jsonrpc":"2.0","method":"error","params":{"message":"temporary reconnect timeout","willRetry":true,"threadId":"thread-1"}}"#,
+        )
+        .unwrap();
+    assert_eq!(
+        notification
+            .runtime_error_kind
+            .as_ref()
+            .and_then(|kind| kind.as_deref()),
+        Some("transport")
+    );
+
+    let outgoing = protocol
+        .enqueue_user_message(UserMessage {
+            text: "/compact".into(),
+            image_paths: Vec::new(),
+        })
+        .unwrap();
+    let response = format!(
+        r#"{{"jsonrpc":"2.0","id":{},"error":{{"code":-32000,"message":"compact service returned 502"}}}}"#,
+        serde_json::to_string(outgoing[0]["id"].as_str().unwrap()).unwrap()
+    );
+    let result = protocol.handle_server_line(&response).unwrap();
+    assert_eq!(
+        result
+            .runtime_error_kind
+            .as_ref()
+            .and_then(|kind| kind.as_deref()),
+        Some("provider")
+    );
 }
 
 #[test]

@@ -14,6 +14,7 @@ import '../shared/media/share_attachments.dart';
 import '../shared/storage/auth_storage.dart';
 import '../shared/storage/session_composer_draft_store.dart';
 import '../shared/storage/session_detail_cache_store.dart';
+import '../shared/storage/session_outbox_store.dart';
 import '../shared/storage/voice_credentials_storage.dart';
 import '../shared/voice/doubao_voice_input_controller.dart';
 import '../shared/voice/voice_input_controller.dart';
@@ -32,8 +33,7 @@ Future<bool> _defaultOpenExternalLink(Uri uri) async {
 
 const agentDockAppVersion = '1.0.0+1';
 const _launchOfflineText = 'Offline. Waiting for network...';
-const _invalidDaemonText =
-    'Daemon responded but does not look like Agent Dock';
+const _invalidDaemonText = 'Daemon responded but does not look like Agent Dock';
 const _loginFailureText = 'Could not sign in';
 const _restoreFailureText = 'Could not restore session';
 const _sessionExpiredText = 'Session expired. Sign in again.';
@@ -50,6 +50,7 @@ class AgentDockApp extends StatelessWidget {
     AuthStorage? authStorage,
     SessionComposerDraftStore? composerDraftStore,
     SessionDetailCacheStore? sessionDetailCacheStore,
+    SessionOutboxStore? outboxStore,
     VoiceCredentialsStorage? voiceCredentialsStorage,
     this.showDebugTimelineItems,
     this.doubaoSocketClient,
@@ -68,6 +69,7 @@ class AgentDockApp extends StatelessWidget {
            composerDraftStore ?? MemorySessionComposerDraftStore(),
        sessionDetailCacheStore =
            sessionDetailCacheStore ?? MemorySessionDetailCacheStore(),
+       outboxStore = outboxStore ?? MemorySessionOutboxStore(),
        voiceCredentialsStorage =
            voiceCredentialsStorage ?? SecureVoiceCredentialsStorage();
 
@@ -79,6 +81,7 @@ class AgentDockApp extends StatelessWidget {
   final AuthStorage authStorage;
   final SessionComposerDraftStore composerDraftStore;
   final SessionDetailCacheStore sessionDetailCacheStore;
+  final SessionOutboxStore outboxStore;
   final VoiceCredentialsStorage voiceCredentialsStorage;
   final bool? showDebugTimelineItems;
   final DoubaoSocketClient? doubaoSocketClient;
@@ -100,6 +103,7 @@ class AgentDockApp extends StatelessWidget {
         authStorage: authStorage,
         composerDraftStore: composerDraftStore,
         sessionDetailCacheStore: sessionDetailCacheStore,
+        outboxStore: outboxStore,
         voiceCredentialsStorage: voiceCredentialsStorage,
         showDebugTimelineItems: showDebugTimelineItems,
         doubaoSocketClient: doubaoSocketClient,
@@ -120,6 +124,7 @@ class _AgentDockShell extends StatefulWidget {
     required this.authStorage,
     required this.composerDraftStore,
     required this.sessionDetailCacheStore,
+    required this.outboxStore,
     required this.voiceCredentialsStorage,
     required this.showDebugTimelineItems,
     required this.doubaoSocketClient,
@@ -135,6 +140,7 @@ class _AgentDockShell extends StatefulWidget {
   final AuthStorage authStorage;
   final SessionComposerDraftStore composerDraftStore;
   final SessionDetailCacheStore sessionDetailCacheStore;
+  final SessionOutboxStore outboxStore;
   final VoiceCredentialsStorage voiceCredentialsStorage;
   final bool? showDebugTimelineItems;
   final DoubaoSocketClient? doubaoSocketClient;
@@ -285,10 +291,10 @@ class _AgentDockShellState extends State<_AgentDockShell> {
     if (!mounted) {
       return;
     }
-      setState(() {
-        _restoreStatusText = 'Restoring session...';
-        _restoreFailed = false;
-      });
+    setState(() {
+      _restoreStatusText = 'Restoring session...';
+      _restoreFailed = false;
+    });
 
     try {
       api ??= widget.apiFactory(_daemonUrl);
@@ -454,10 +460,7 @@ class _AgentDockShellState extends State<_AgentDockShell> {
     await _cancelActiveVoiceInput();
     final bootstrap = _bootstrap;
     if (bootstrap != null) {
-      _clearComposerDrafts(
-        daemonUrl: _daemonUrl,
-        userId: bootstrap.user.id,
-      );
+      _clearComposerDrafts(daemonUrl: _daemonUrl, userId: bootstrap.user.id);
       _clearSessionDetailCaches(
         daemonUrl: _daemonUrl,
         userId: bootstrap.user.id,
@@ -482,10 +485,7 @@ class _AgentDockShellState extends State<_AgentDockShell> {
     await _cancelActiveVoiceInput();
     final bootstrap = _bootstrap;
     if (bootstrap != null) {
-      _clearComposerDrafts(
-        daemonUrl: _daemonUrl,
-        userId: bootstrap.user.id,
-      );
+      _clearComposerDrafts(daemonUrl: _daemonUrl, userId: bootstrap.user.id);
       _clearSessionDetailCaches(
         daemonUrl: _daemonUrl,
         userId: bootstrap.user.id,
@@ -526,10 +526,7 @@ class _AgentDockShellState extends State<_AgentDockShell> {
     await _cancelActiveVoiceInput();
     final bootstrap = _bootstrap;
     if (bootstrap != null) {
-      _clearComposerDrafts(
-        daemonUrl: _daemonUrl,
-        userId: bootstrap.user.id,
-      );
+      _clearComposerDrafts(daemonUrl: _daemonUrl, userId: bootstrap.user.id);
       _clearSessionDetailCaches(
         daemonUrl: _daemonUrl,
         userId: bootstrap.user.id,
@@ -610,9 +607,7 @@ class _AgentDockShellState extends State<_AgentDockShell> {
           transport: IoDoubaoVoiceTransport(
             socketClient: widget.doubaoSocketClient,
           ),
-          audioSource: RecordDoubaoAudioSource(
-            recorder: widget.doubaoRecorder,
-          ),
+          audioSource: RecordDoubaoAudioSource(recorder: widget.doubaoRecorder),
         );
       }
     }
@@ -649,7 +644,9 @@ class _AgentDockShellState extends State<_AgentDockShell> {
     }
     return DoubaoVoiceInputController(
       credentials: providerCredentials,
-      transport: IoDoubaoVoiceTransport(socketClient: widget.doubaoSocketClient),
+      transport: IoDoubaoVoiceTransport(
+        socketClient: widget.doubaoSocketClient,
+      ),
       audioSource: RecordDoubaoAudioSource(recorder: widget.doubaoRecorder),
     );
   }
@@ -732,7 +729,9 @@ class _AgentDockShellState extends State<_AgentDockShell> {
     );
   }
 
-  Future<void> _handleInitialSessionsBootstrap(MobileBootstrap bootstrap) async {
+  Future<void> _handleInitialSessionsBootstrap(
+    MobileBootstrap bootstrap,
+  ) async {
     if (!mounted) {
       return;
     }
@@ -784,6 +783,7 @@ class _AgentDockShellState extends State<_AgentDockShell> {
         currentUserId: bootstrap.user.id,
         composerDraftStore: widget.composerDraftStore,
         sessionDetailCacheStore: widget.sessionDetailCacheStore,
+        outboxStore: widget.outboxStore,
         voiceCredentialsStorage: widget.voiceCredentialsStorage,
         showDebugTimelineItems: widget.showDebugTimelineItems,
         onVoiceSettingsChanged: _refreshVoiceSettingsState,

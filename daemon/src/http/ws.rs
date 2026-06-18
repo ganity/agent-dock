@@ -1,16 +1,16 @@
 use axum::{
+    Json,
     extract::{
-        ws::{Message, WebSocket, WebSocketUpgrade},
         Path, Query, State,
+        ws::{Message, WebSocket, WebSocketUpgrade},
     },
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
-    Json,
 };
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::json;
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, Instant, sleep};
 use tokio_tungstenite::tungstenite::Message as UpstreamMessage;
 
 use crate::{
@@ -19,6 +19,9 @@ use crate::{
     session::model::StoredEvent,
     voice::{ProviderMessage, build_audio_request, connect_provider, parse_provider_message},
 };
+
+const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(25);
+const HEARTBEAT_INTERVAL: Duration = Duration::from_millis(250);
 
 #[derive(Deserialize)]
 pub struct EventStreamQuery {
@@ -33,13 +36,25 @@ pub async fn stream_session_events(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    let user = super::routes::current_user_from_headers(&state, &headers)
-        .or_else(|| query.token.as_deref().and_then(|token| state.auth.current_user(token)));
+    let user = super::routes::current_user_from_headers(&state, &headers).or_else(|| {
+        query
+            .token
+            .as_deref()
+            .and_then(|token| state.auth.current_user(token))
+    });
     let Some(user) = user else {
-        return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "UNAUTHORIZED" }))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "UNAUTHORIZED" })),
+        )
+            .into_response();
     };
 
-    match state.sessions.can_access_session(&session_id, &user.id).await {
+    match state
+        .sessions
+        .can_access_session(&session_id, &user.id)
+        .await
+    {
         Ok(true) => {}
         Ok(false) => {
             return (StatusCode::FORBIDDEN, Json(json!({ "error": "FORBIDDEN" }))).into_response();
@@ -61,7 +76,11 @@ pub async fn stream_voice_input(
     headers: HeaderMap,
 ) -> impl IntoResponse {
     if !super::routes::is_authenticated(&state, &headers) {
-        return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "UNAUTHORIZED" }))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "UNAUTHORIZED" })),
+        )
+            .into_response();
     }
 
     let Some(config) = state.config.voice_input.clone() else {
@@ -84,14 +103,56 @@ async fn follow_events(
     after: i64,
 ) -> anyhow::Result<()> {
     let mut cursor = after;
+    let mut last_sent = Instant::now();
+    let mut checked_cursor = false;
 
     loop {
+        if !checked_cursor {
+            checked_cursor = true;
+            if let Some(latest_event_id) = state.sessions.latest_event_id(&session_id).await? {
+                if cursor > latest_event_id {
+                    socket
+                        .send(Message::Text(
+                            json!({
+                                "id": latest_event_id,
+                                "eventType": "session.resync.required",
+                                "payload": {
+                                    "reason": "cursor_ahead",
+                                    "requestedAfter": cursor,
+                                    "latestEventId": latest_event_id
+                                }
+                            })
+                            .to_string()
+                            .into(),
+                        ))
+                        .await?;
+                    cursor = latest_event_id;
+                    last_sent = Instant::now();
+                }
+            }
+        }
+
         let events = state.sessions.events_after(&session_id, cursor).await?;
+        let had_events = !events.is_empty();
 
         for event in events {
             cursor = event.id;
             let dto = event_to_dto(event);
-            socket.send(Message::Text(serde_json::to_string(&dto)?.into())).await?;
+            socket
+                .send(Message::Text(serde_json::to_string(&dto)?.into()))
+                .await?;
+        }
+        if had_events {
+            last_sent = Instant::now();
+        } else if last_sent.elapsed() >= HEARTBEAT_INTERVAL {
+            socket
+                .send(Message::Text(
+                    json!({ "id": cursor, "eventType": "session.heartbeat", "payload": {} })
+                        .to_string()
+                        .into(),
+                ))
+                .await?;
+            last_sent = Instant::now();
         }
 
         tokio::select! {
@@ -102,14 +163,17 @@ async fn follow_events(
                     Some(Err(_)) => break,
                 }
             }
-            _ = sleep(Duration::from_millis(25)) => {}
+            _ = sleep(EVENT_POLL_INTERVAL) => {}
         }
     }
 
     Ok(())
 }
 
-async fn proxy_voice_input(mut socket: WebSocket, config: crate::config::VoiceInputConfig) -> anyhow::Result<()> {
+async fn proxy_voice_input(
+    mut socket: WebSocket,
+    config: crate::config::VoiceInputConfig,
+) -> anyhow::Result<()> {
     let (mut upstream, _) = match connect_provider(&config).await {
         Ok(value) => value,
         Err(error) => {
@@ -219,7 +283,10 @@ fn is_stop_message(text: &str) -> bool {
     matches!(
         serde_json::from_str::<serde_json::Value>(text)
             .ok()
-            .and_then(|value| value.get("type").and_then(serde_json::Value::as_str).map(str::to_string))
+            .and_then(|value| value
+                .get("type")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string))
             .as_deref(),
         Some("stop")
     )

@@ -1,13 +1,20 @@
 use std::collections::{HashMap, VecDeque};
 
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::session::model::StoredEvent;
 
 pub struct CodexLineResult {
     pub outgoing: Vec<Value>,
     pub event: Option<StoredEvent>,
+    pub runtime_session_id: Option<String>,
+    pub session_status: Option<String>,
+    pub runtime_health: Option<String>,
+    pub runtime_error_kind: Option<Option<String>>,
+    pub runtime_error_message: Option<Option<String>>,
+    pub can_accept_user_message: bool,
+    pub completed_user_message: bool,
 }
 
 pub struct CodexSessionProtocol {
@@ -15,8 +22,11 @@ pub struct CodexSessionProtocol {
     next_request_id: usize,
     initialize_request_id: Option<String>,
     pending_thread_request_id: Option<String>,
+    pending_thread_request_is_resume: bool,
     resume_thread_id: Option<String>,
     thread_id: Option<String>,
+    current_turn_id: Option<String>,
+    in_flight_user_message: bool,
     queued_messages: VecDeque<UserMessage>,
     pending_command_requests: HashMap<String, PendingCommand>,
 }
@@ -34,8 +44,11 @@ impl CodexSessionProtocol {
             next_request_id: 1,
             initialize_request_id: None,
             pending_thread_request_id: None,
+            pending_thread_request_is_resume: false,
             resume_thread_id: None,
             thread_id: None,
+            current_turn_id: None,
+            in_flight_user_message: false,
             queued_messages: VecDeque::new(),
             pending_command_requests: HashMap::new(),
         }
@@ -47,8 +60,11 @@ impl CodexSessionProtocol {
             next_request_id: 1,
             initialize_request_id: None,
             pending_thread_request_id: None,
+            pending_thread_request_is_resume: false,
             resume_thread_id: Some(thread_id),
             thread_id: None,
+            current_turn_id: None,
+            in_flight_user_message: false,
             queued_messages: VecDeque::new(),
             pending_command_requests: HashMap::new(),
         }
@@ -62,6 +78,10 @@ impl CodexSessionProtocol {
 
     pub fn enqueue_user_message(&mut self, message: UserMessage) -> anyhow::Result<Vec<Value>> {
         if let Some(thread_id) = &self.thread_id {
+            if self.in_flight_user_message {
+                self.queued_messages.push_back(message);
+                return Ok(Vec::new());
+            }
             return Ok(self.next_user_message_requests(thread_id.clone(), message));
         }
 
@@ -69,11 +89,54 @@ impl CodexSessionProtocol {
         Ok(Vec::new())
     }
 
+    pub fn is_thread_ready(&self) -> bool {
+        self.thread_id.is_some()
+    }
+
+    pub fn can_accept_user_message(&self) -> bool {
+        self.is_thread_ready() && !self.in_flight_user_message
+    }
+
     pub fn handle_server_line(&mut self, line: &str) -> anyhow::Result<CodexLineResult> {
+        let notification = parse_notification_envelope(line)?;
+        if let Some(ref envelope) = notification {
+            if self.should_ignore_notification(envelope) {
+                return Ok(CodexLineResult {
+                    outgoing: Vec::new(),
+                    event: None,
+                    runtime_session_id: None,
+                    session_status: None,
+                    runtime_health: None,
+                    runtime_error_kind: None,
+                    runtime_error_message: None,
+                    can_accept_user_message: self.can_accept_user_message(),
+                    completed_user_message: false,
+                });
+            }
+            self.maybe_bind_current_turn_id(envelope);
+        }
+
+        let session_status = parse_notification_event_status(line)?;
         if let Some(event) = parse_notification_event(line)? {
+            let completed_user_message = notification.as_ref().is_some_and(|envelope| {
+                self.should_complete_user_message(envelope, session_status.as_deref())
+            });
+            if completed_user_message {
+                self.current_turn_id = None;
+                self.in_flight_user_message = false;
+            }
+
+            let can_accept_user_message = self.can_accept_user_message();
             return Ok(CodexLineResult {
                 outgoing: Vec::new(),
                 event: Some(event),
+                runtime_session_id: None,
+                session_status: derive_session_status_from_event_type(session_status),
+                runtime_health: derive_runtime_health_from_notification(line)?,
+                runtime_error_kind: derive_runtime_error_kind_from_notification(line)?,
+                runtime_error_message: derive_runtime_error_message_from_notification(line)?,
+                can_accept_user_message,
+                completed_user_message,
             });
         }
 
@@ -81,16 +144,25 @@ impl CodexSessionProtocol {
             return Ok(CodexLineResult {
                 outgoing: Vec::new(),
                 event: None,
+                runtime_session_id: None,
+                session_status: None,
+                runtime_health: None,
+                runtime_error_kind: None,
+                runtime_error_message: None,
+                can_accept_user_message: self.can_accept_user_message(),
+                completed_user_message: false,
             });
         };
 
         if self.initialize_request_id.as_deref() == Some(response.id.as_str()) {
-            let request_id = if self.resume_thread_id.is_some() {
+            let is_resume = self.resume_thread_id.is_some();
+            let request_id = if is_resume {
                 self.next_id("thread-resume")
             } else {
                 self.next_id("thread-start")
             };
             self.pending_thread_request_id = Some(request_id.clone());
+            self.pending_thread_request_is_resume = is_resume;
             let request = if let Some(thread_id) = &self.resume_thread_id {
                 build_thread_resume_request(&request_id, thread_id, &self.cwd)
             } else {
@@ -99,45 +171,100 @@ impl CodexSessionProtocol {
             return Ok(CodexLineResult {
                 outgoing: vec![request],
                 event: None,
+                runtime_session_id: None,
+                session_status: None,
+                runtime_health: None,
+                runtime_error_kind: None,
+                runtime_error_message: None,
+                can_accept_user_message: false,
+                completed_user_message: false,
             });
         }
 
         if self.pending_thread_request_id.as_deref() == Some(response.id.as_str()) {
-            let thread_id = response
+            if self.pending_thread_request_is_resume
+                && response
+                    .error_message
+                    .as_deref()
+                    .is_some_and(is_stale_thread_resume_error)
+            {
+                return Ok(self.fallback_to_fresh_thread_start());
+            }
+
+            let maybe_thread_id = response
                 .result
                 .get("thread")
                 .and_then(|thread| thread.get("id"))
-                .and_then(Value::as_str)
+                .and_then(Value::as_str);
+
+            if self.pending_thread_request_is_resume && maybe_thread_id.is_none() {
+                return Ok(self.fallback_to_fresh_thread_start());
+            }
+
+            let thread_id = maybe_thread_id
                 .ok_or_else(|| anyhow::anyhow!("thread/start response missing thread.id"))?
                 .to_string();
             self.thread_id = Some(thread_id.clone());
             self.pending_thread_request_id = None;
+            self.pending_thread_request_is_resume = false;
 
             let mut outgoing = Vec::new();
             while let Some(message) = self.queued_messages.pop_front() {
+                if self.in_flight_user_message {
+                    self.queued_messages.push_front(message);
+                    break;
+                }
                 outgoing.extend(self.next_user_message_requests(thread_id.clone(), message));
             }
+            let can_accept_user_message = self.can_accept_user_message();
 
             return Ok(CodexLineResult {
                 outgoing,
                 event: None,
+                runtime_session_id: Some(thread_id),
+                session_status: Some("running".to_string()),
+                runtime_health: Some("online".to_string()),
+                runtime_error_kind: Some(None),
+                runtime_error_message: Some(None),
+                can_accept_user_message,
+                completed_user_message: false,
             });
         }
 
         if let Some(command) = self.pending_command_requests.remove(response.id.as_str()) {
+            let runtime_error_message = response.error_message.as_deref();
+            self.current_turn_id = None;
+            self.in_flight_user_message = false;
+            let can_accept_user_message = self.can_accept_user_message();
             return Ok(CodexLineResult {
                 outgoing: Vec::new(),
                 event: Some(command_response_event(
                     command,
                     &response.result,
-                    response.error_message.as_deref(),
+                    runtime_error_message,
                 )),
+                runtime_session_id: None,
+                session_status: None,
+                runtime_health: runtime_error_message.map(|_| "recoverable_error".to_string()),
+                runtime_error_kind: runtime_error_message
+                    .map(|message| Some(classify_response_error_kind(message).to_string())),
+                runtime_error_message: runtime_error_message
+                    .map(|message| Some(message.to_string())),
+                can_accept_user_message,
+                completed_user_message: true,
             });
         }
 
         Ok(CodexLineResult {
             outgoing: Vec::new(),
             event: None,
+            runtime_session_id: None,
+            session_status: None,
+            runtime_health: None,
+            runtime_error_kind: None,
+            runtime_error_message: None,
+            can_accept_user_message: self.can_accept_user_message(),
+            completed_user_message: false,
         })
     }
 
@@ -157,12 +284,15 @@ impl CodexSessionProtocol {
         let request_id = self.next_id(command.request_id_label());
         self.pending_command_requests
             .insert(request_id.clone(), command.clone());
+        self.in_flight_user_message = true;
 
         vec![build_command_request(&request_id, &thread_id, &command)]
     }
 
     fn next_turn_start_request(&mut self, thread_id: String, message: UserMessage) -> Value {
         let request_id = self.next_id("turn-start");
+        self.current_turn_id = None;
+        self.in_flight_user_message = true;
         build_turn_start_request(&request_id, &thread_id, &message)
     }
 
@@ -170,6 +300,77 @@ impl CodexSessionProtocol {
         let id = format!("agent-dock-{label}-{}", self.next_request_id);
         self.next_request_id += 1;
         id
+    }
+
+    fn fallback_to_fresh_thread_start(&mut self) -> CodexLineResult {
+        let request_id = self.next_id("thread-start");
+        self.pending_thread_request_id = Some(request_id.clone());
+        self.pending_thread_request_is_resume = false;
+        self.resume_thread_id = None;
+        CodexLineResult {
+            outgoing: vec![build_thread_start_request(&request_id, &self.cwd)],
+            event: None,
+            runtime_session_id: None,
+            session_status: None,
+            runtime_health: None,
+            runtime_error_kind: None,
+            runtime_error_message: None,
+            can_accept_user_message: false,
+            completed_user_message: false,
+        }
+    }
+
+    fn should_ignore_notification(&self, envelope: &RpcNotificationEnvelope) -> bool {
+        let Some(current_thread_id) = self.thread_id.as_deref() else {
+            return false;
+        };
+        let Some(params) = envelope.params.as_ref() else {
+            return false;
+        };
+        let Some(notification_thread_id) = extract_notification_thread_id(params) else {
+            return false;
+        };
+
+        notification_thread_id != current_thread_id
+    }
+
+    fn maybe_bind_current_turn_id(&mut self, envelope: &RpcNotificationEnvelope) {
+        if !self.in_flight_user_message || self.current_turn_id.is_some() {
+            return;
+        }
+        let Some(params) = envelope.params.as_ref() else {
+            return;
+        };
+        let Some(turn_id) = extract_notification_turn_id(params) else {
+            return;
+        };
+
+        self.current_turn_id = Some(turn_id.to_string());
+    }
+
+    fn should_complete_user_message(
+        &self,
+        envelope: &RpcNotificationEnvelope,
+        session_status: Option<&str>,
+    ) -> bool {
+        if envelope.method.as_deref() != Some("turn/completed")
+            || !self.in_flight_user_message
+            || !session_status.is_some_and(is_turn_terminal_status)
+        {
+            return false;
+        }
+
+        let Some(params) = envelope.params.as_ref() else {
+            return false;
+        };
+        let Some(completed_turn_id) = extract_notification_turn_id(params) else {
+            return self.current_turn_id.is_none();
+        };
+
+        match self.current_turn_id.as_deref() {
+            Some(current_turn_id) => current_turn_id == completed_turn_id,
+            None => true,
+        }
     }
 }
 
@@ -421,7 +622,17 @@ fn format_goal(goal: &Value) -> String {
 #[derive(Deserialize)]
 struct RpcNotificationEnvelope {
     method: Option<String>,
+    #[serde(default)]
     params: Option<Value>,
+}
+
+fn parse_notification_envelope(line: &str) -> anyhow::Result<Option<RpcNotificationEnvelope>> {
+    let value: Value = serde_json::from_str(line)?;
+    if value.get("id").is_some() || value.get("method").is_none() {
+        return Ok(None);
+    }
+
+    Ok(Some(serde_json::from_value(value)?))
 }
 
 pub fn parse_notification_event(line: &str) -> anyhow::Result<Option<StoredEvent>> {
@@ -441,6 +652,7 @@ pub fn parse_notification_event(line: &str) -> anyhow::Result<Option<StoredEvent
         Some("item/started") => "tool.call.started",
         Some("turn/completed") => "session.status.changed",
         Some("thread/status/changed") => "session.status.changed",
+        Some("error") => "session.error",
         _ => return Ok(None),
     };
 
@@ -468,6 +680,12 @@ pub fn parse_notification_event(line: &str) -> anyhow::Result<Option<StoredEvent
             json!({ "text": params.get("delta").and_then(Value::as_str).unwrap_or_default() })
                 .to_string()
         }
+        (Some("error"), params) => json!({
+            "message": params.get("message").and_then(Value::as_str).unwrap_or_default(),
+            "threadId": params.get("threadId").and_then(Value::as_str),
+            "willRetry": params.get("willRetry").and_then(Value::as_bool).unwrap_or(false)
+        })
+        .to_string(),
         (_, params) => params.to_string(),
     };
 
@@ -476,6 +694,195 @@ pub fn parse_notification_event(line: &str) -> anyhow::Result<Option<StoredEvent
         event_type: event_type.to_string(),
         payload_json,
     }))
+}
+
+fn parse_notification_event_status(line: &str) -> anyhow::Result<Option<String>> {
+    let envelope: RpcNotificationEnvelope = serde_json::from_str(line)?;
+    let params = envelope.params.unwrap_or_default();
+
+    let raw_status = match envelope.method.as_deref() {
+        Some("thread/status/changed") => params
+            .get("status")
+            .and_then(|status| status.get("type"))
+            .and_then(Value::as_str),
+        Some("turn/completed") => extract_notification_turn_status(&params),
+        _ => None,
+    };
+
+    Ok(raw_status.map(str::to_owned))
+}
+
+fn extract_notification_thread_id(params: &Value) -> Option<&str> {
+    params.get("threadId").and_then(Value::as_str)
+}
+
+fn extract_notification_turn_id(params: &Value) -> Option<&str> {
+    params.get("turnId").and_then(Value::as_str).or_else(|| {
+        params
+            .get("turn")
+            .and_then(|turn| turn.get("id"))
+            .and_then(Value::as_str)
+    })
+}
+
+fn extract_notification_turn_status(params: &Value) -> Option<&str> {
+    params
+        .get("status")
+        .and_then(|status| status.get("type"))
+        .and_then(Value::as_str)
+        .or_else(|| {
+            params
+                .get("turn")
+                .and_then(|turn| turn.get("status"))
+                .and_then(Value::as_str)
+        })
+        .or_else(|| {
+            params
+                .get("turn")
+                .and_then(|turn| turn.get("status"))
+                .and_then(|status| status.get("type"))
+                .and_then(Value::as_str)
+        })
+}
+
+fn derive_session_status_from_event_type(raw_status: Option<String>) -> Option<String> {
+    match raw_status.as_deref() {
+        Some("active") | Some("running") => Some("running".to_string()),
+        Some("idle") => Some("idle".to_string()),
+        Some("failed") => Some("failed".to_string()),
+        Some("completed") => Some("suspended".to_string()),
+        _ => None,
+    }
+}
+
+fn is_turn_terminal_status(raw_status: &str) -> bool {
+    matches!(
+        raw_status,
+        "completed" | "failed" | "cancelled" | "canceled"
+    )
+}
+
+fn derive_runtime_health_from_notification(line: &str) -> anyhow::Result<Option<String>> {
+    let envelope: RpcNotificationEnvelope = serde_json::from_str(line)?;
+    let params = envelope.params.unwrap_or_default();
+
+    match envelope.method.as_deref() {
+        Some("thread/status/changed")
+            if params
+                .get("status")
+                .and_then(|status| status.get("type"))
+                .and_then(Value::as_str)
+                == Some("systemError") =>
+        {
+            Ok(Some("recoverable_error".to_string()))
+        }
+        Some("error") => Ok(Some("recoverable_error".to_string())),
+        _ => Ok(None),
+    }
+}
+
+fn derive_runtime_error_kind_from_notification(
+    line: &str,
+) -> anyhow::Result<Option<Option<String>>> {
+    let envelope: RpcNotificationEnvelope = serde_json::from_str(line)?;
+    let params = envelope.params.unwrap_or_default();
+
+    match envelope.method.as_deref() {
+        Some("error") => Ok(Some(Some(
+            classify_runtime_error_kind(
+                params
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+            )
+            .to_string(),
+        ))),
+        Some("thread/status/changed")
+            if params
+                .get("status")
+                .and_then(|status| status.get("type"))
+                .and_then(Value::as_str)
+                == Some("systemError") =>
+        {
+            Ok(Some(Some("provider".to_string())))
+        }
+        _ => Ok(None),
+    }
+}
+
+fn derive_runtime_error_message_from_notification(
+    line: &str,
+) -> anyhow::Result<Option<Option<String>>> {
+    let envelope: RpcNotificationEnvelope = serde_json::from_str(line)?;
+    let params = envelope.params.unwrap_or_default();
+
+    match envelope.method.as_deref() {
+        Some("error") => Ok(Some(
+            params
+                .get("message")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+        )),
+        Some("thread/status/changed")
+            if params
+                .get("status")
+                .and_then(|status| status.get("type"))
+                .and_then(Value::as_str)
+                == Some("systemError") =>
+        {
+            Ok(Some(
+                params
+                    .get("status")
+                    .and_then(|status| status.get("message"))
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+            ))
+        }
+        _ => Ok(None),
+    }
+}
+
+fn classify_runtime_error_kind(message: &str) -> &'static str {
+    classify_response_error_kind(message)
+}
+
+fn classify_response_error_kind(message: &str) -> &'static str {
+    let normalized = message.trim().to_ascii_lowercase();
+    if is_stale_thread_resume_error(message) {
+        "stale_thread"
+    } else if normalized.contains("429")
+        || normalized.contains("401")
+        || normalized.contains("403")
+        || normalized.contains("502")
+        || normalized.contains("503")
+        || normalized.contains("504")
+        || normalized.contains("bad gateway")
+        || normalized.contains("unauthorized")
+        || normalized.contains("forbidden")
+        || normalized.contains("rate limit")
+        || normalized.contains("provider")
+        || normalized.contains("compact service")
+    {
+        "provider"
+    } else if normalized.contains("connection")
+        || normalized.contains("timeout")
+        || normalized.contains("timed out")
+        || normalized.contains("transport")
+        || normalized.contains("socket")
+        || normalized.contains("econn")
+        || normalized.contains("network")
+    {
+        "transport"
+    } else {
+        "runtime"
+    }
+}
+
+fn is_stale_thread_resume_error(message: &str) -> bool {
+    let normalized = message.trim().to_ascii_lowercase();
+    normalized.contains("unknown thread")
+        || normalized.contains("thread not found")
+        || normalized.contains("no thread found")
 }
 
 #[derive(Deserialize)]

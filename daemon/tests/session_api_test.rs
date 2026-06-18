@@ -1,4 +1,4 @@
-use axum::body::{to_bytes, Body};
+use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode};
 use tower::ServiceExt;
 
@@ -30,9 +30,13 @@ async fn create_session_returns_persisted_placeholder_snapshot() {
 
     let body = to_bytes(create.into_body(), usize::MAX).await.unwrap();
     let text = String::from_utf8(body.to_vec()).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&text).unwrap();
 
     assert!(text.contains("\"agentKind\":\"placeholder\""));
     assert!(text.contains("\"eventType\":\"session.created\""));
+    assert_eq!(json["runtimeHealth"].as_str(), Some("unknown"));
+    assert!(json["runtimeErrorKind"].is_null());
+    assert!(json["runtimeErrorMessage"].is_null());
 }
 
 #[tokio::test]
@@ -106,7 +110,9 @@ async fn sessions_are_scoped_to_authenticated_user() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/sessions/{session_id}/attachments?filename=x.png"))
+                .uri(format!(
+                    "/api/sessions/{session_id}/attachments?filename=x.png"
+                ))
                 .header("content-type", "image/png")
                 .header("authorization", format!("Bearer {bob_token}"))
                 .body(Body::from("png-data"))

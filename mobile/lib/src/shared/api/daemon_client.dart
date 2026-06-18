@@ -30,9 +30,10 @@ abstract class DaemonApi {
     required int afterEventId,
   });
 
-  Future<void> sendMessage({
+  Future<SendMessageAck> sendMessage({
     required String sessionId,
     required String token,
+    required String clientMessageId,
     required String message,
     List<String> imagePaths = const <String>[],
   });
@@ -247,13 +248,14 @@ class DaemonClient implements DaemonApi {
   }
 
   @override
-  Future<void> sendMessage({
+  Future<SendMessageAck> sendMessage({
     required String sessionId,
     required String token,
+    required String clientMessageId,
     required String message,
     List<String> imagePaths = const <String>[],
   }) async {
-    await _sendJson(
+    final json = await _sendJson(
       TransportRequest(
         method: 'POST',
         url: _url('/api/sessions/$sessionId/messages'),
@@ -261,9 +263,15 @@ class DaemonClient implements DaemonApi {
           'authorization': 'Bearer $token',
           'content-type': 'application/json',
         },
-        body: jsonEncode({'message': message, 'imagePaths': imagePaths}),
+        body: jsonEncode({
+          'clientMessageId': clientMessageId,
+          'message': message,
+          'imagePaths': imagePaths,
+        }),
       ),
     );
+
+    return SendMessageAck.fromJson(json);
   }
 
   @override
@@ -400,9 +408,7 @@ class DaemonClient implements DaemonApi {
       ),
     );
 
-    return _objects(
-      json['candidates'],
-    ).map(ResumeCandidate.fromJson).toList();
+    return _objects(json['candidates']).map(ResumeCandidate.fromJson).toList();
   }
 
   Uri _url(String path) {
@@ -650,6 +656,9 @@ class SessionSummary {
     required this.agentKind,
     required this.sourceKind,
     required this.runtimeSessionId,
+    this.runtimeHealth = 'unknown',
+    this.runtimeErrorKind,
+    this.runtimeErrorMessage,
     required this.status,
     required this.workspacePath,
   });
@@ -661,6 +670,9 @@ class SessionSummary {
       agentKind: json['agentKind'] as String,
       sourceKind: json['sourceKind'] as String,
       runtimeSessionId: json['runtimeSessionId'] as String?,
+      runtimeHealth: (json['runtimeHealth'] as String?) ?? 'unknown',
+      runtimeErrorKind: json['runtimeErrorKind'] as String?,
+      runtimeErrorMessage: json['runtimeErrorMessage'] as String?,
       status: json['status'] as String,
       workspacePath: json['workspacePath'] as String,
     );
@@ -671,6 +683,9 @@ class SessionSummary {
   final String agentKind;
   final String sourceKind;
   final String? runtimeSessionId;
+  final String runtimeHealth;
+  final String? runtimeErrorKind;
+  final String? runtimeErrorMessage;
   final String status;
   final String workspacePath;
 }
@@ -682,6 +697,9 @@ class SessionSnapshot {
     required this.agentKind,
     required this.sourceKind,
     required this.runtimeSessionId,
+    this.runtimeHealth = 'unknown',
+    this.runtimeErrorKind,
+    this.runtimeErrorMessage,
     required this.workspacePath,
     required this.status,
     required this.hasMoreHistory,
@@ -689,16 +707,20 @@ class SessionSnapshot {
   });
 
   factory SessionSnapshot.fromJson(Map<String, Object?> json) {
+    final events = _objects(json['events']).map(SessionEvent.fromJson).toList();
     return SessionSnapshot(
       id: json['id'] as String,
       title: json['title'] as String?,
       agentKind: json['agentKind'] as String,
       sourceKind: json['sourceKind'] as String,
       runtimeSessionId: json['runtimeSessionId'] as String?,
+      runtimeHealth: (json['runtimeHealth'] as String?) ?? 'unknown',
+      runtimeErrorKind: json['runtimeErrorKind'] as String?,
+      runtimeErrorMessage: json['runtimeErrorMessage'] as String?,
       workspacePath: json['workspacePath'] as String,
       status: json['status'] as String,
       hasMoreHistory: json['hasMoreHistory'] as bool,
-      events: _objects(json['events']).map(SessionEvent.fromJson).toList(),
+      events: events,
     );
   }
 
@@ -707,10 +729,36 @@ class SessionSnapshot {
   final String agentKind;
   final String sourceKind;
   final String? runtimeSessionId;
+  final String runtimeHealth;
+  final String? runtimeErrorKind;
+  final String? runtimeErrorMessage;
   final String workspacePath;
   final String status;
   final bool hasMoreHistory;
   final List<SessionEvent> events;
+}
+
+class SendMessageAck {
+  const SendMessageAck({
+    required this.accepted,
+    required this.clientMessageId,
+    required this.eventId,
+    required this.sessionStatus,
+  });
+
+  factory SendMessageAck.fromJson(Map<String, Object?> json) {
+    return SendMessageAck(
+      accepted: json['accepted'] as bool,
+      clientMessageId: json['clientMessageId'] as String,
+      eventId: json['eventId'] as int,
+      sessionStatus: json['sessionStatus'] as String,
+    );
+  }
+
+  final bool accepted;
+  final String clientMessageId;
+  final int eventId;
+  final String sessionStatus;
 }
 
 extension SessionSnapshotSummary on SessionSnapshot {
@@ -721,6 +769,9 @@ extension SessionSnapshotSummary on SessionSnapshot {
       agentKind: agentKind,
       sourceKind: sourceKind,
       runtimeSessionId: runtimeSessionId,
+      runtimeHealth: runtimeHealth,
+      runtimeErrorKind: runtimeErrorKind,
+      runtimeErrorMessage: runtimeErrorMessage,
       status: status,
       workspacePath: workspacePath,
     );

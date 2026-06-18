@@ -13,6 +13,7 @@ import '../../shared/media/share_attachments.dart';
 import '../../shared/delayed_inline_spinner.dart';
 import '../../shared/storage/session_composer_draft_store.dart';
 import '../../shared/storage/session_detail_cache_store.dart';
+import '../../shared/storage/session_outbox_store.dart';
 import '../../shared/storage/voice_credentials_storage.dart';
 import '../../shared/voice/voice_input_controller.dart';
 
@@ -33,25 +34,39 @@ class _ResolvedOpenSession {
   const _ResolvedOpenSession({
     required this.summary,
     required this.initialSnapshot,
+    required this.resumeInBackground,
   });
 
   final SessionSummary summary;
   final SessionSnapshot? initialSnapshot;
+  final bool resumeInBackground;
 }
 
-Future<_ResolvedOpenSession> _resolveSessionForOpen({
-  required DaemonApi api,
-  required String token,
-  required SessionSummary session,
-}) async {
-  if (session.status.toLowerCase() != 'suspended') {
-    return _ResolvedOpenSession(summary: session, initialSnapshot: null);
+_ResolvedOpenSession _resolveSessionForOpen({required SessionSummary session}) {
+  final runtimeHealth = session.runtimeHealth.toLowerCase();
+  final runtimeErrorKind = session.runtimeErrorKind?.toLowerCase();
+  final shouldResumeForRuntimeHealth =
+      runtimeHealth == 'offline' ||
+      (runtimeHealth == 'unknown' &&
+          (session.runtimeSessionId?.isNotEmpty ?? false)) ||
+      (runtimeHealth == 'recoverable_error' &&
+          (runtimeErrorKind == null ||
+              runtimeErrorKind == 'runtime' ||
+              runtimeErrorKind == 'stale_thread'));
+
+  if (session.status.toLowerCase() != 'suspended' &&
+      !shouldResumeForRuntimeHealth) {
+    return _ResolvedOpenSession(
+      summary: session,
+      initialSnapshot: null,
+      resumeInBackground: false,
+    );
   }
 
-  final snapshot = await api.resumeSession(sessionId: session.id, token: token);
   return _ResolvedOpenSession(
-    summary: snapshot.toSummary(),
-    initialSnapshot: snapshot,
+    summary: session,
+    initialSnapshot: null,
+    resumeInBackground: true,
   );
 }
 
@@ -71,6 +86,7 @@ class SessionsPage extends StatefulWidget {
     required this.currentUserId,
     required this.composerDraftStore,
     required this.sessionDetailCacheStore,
+    required this.outboxStore,
     required this.voiceCredentialsStorage,
     required this.onVoiceSettingsChanged,
     required this.onBootstrapLoaded,
@@ -93,6 +109,7 @@ class SessionsPage extends StatefulWidget {
   final String currentUserId;
   final SessionComposerDraftStore composerDraftStore;
   final SessionDetailCacheStore sessionDetailCacheStore;
+  final SessionOutboxStore outboxStore;
   final VoiceCredentialsStorage voiceCredentialsStorage;
   final Future<void> Function() onVoiceSettingsChanged;
   final Future<void> Function(MobileBootstrap bootstrap) onBootstrapLoaded;
@@ -115,16 +132,6 @@ class _SessionsPageState extends State<SessionsPage>
   final Set<String> _enteringSessionIds = <String>{};
   late bool _isBootstrapLoading;
   String? _statusBannerText;
-
-  List<SessionSummary> get _runningSessions {
-    if (_isUnsupportedDaemonVersion) {
-      return const <SessionSummary>[];
-    }
-    return _sortedSessions.where((session) {
-      final normalized = session.status.toLowerCase();
-      return normalized == 'running' || normalized == 'active';
-    }).toList();
-  }
 
   bool get _isUnsupportedDaemonVersion =>
       !_isDaemonVersionSupported(_bootstrap.daemonVersion);
@@ -292,21 +299,31 @@ class _SessionsPageState extends State<SessionsPage>
     final isUnsupportedDaemonVersion = _isUnsupportedDaemonVersion;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Sessions'),
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(28),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-            child: Align(
-              alignment: Alignment.centerLeft,
+        title: Row(
+          children: [
+            const Text('Sessions'),
+            const SizedBox(width: 10),
+            Flexible(
               child: _AppBarConnectionStatus(
                 host: widget.daemonUrl.host,
                 isOffline: _statusBannerText == _sessionsOfflineText,
               ),
             ),
-          ),
+          ],
         ),
         actions: [
+          Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 96),
+              child: Text(
+                _bootstrap.user.displayName,
+                key: const ValueKey('sessions-appbar-user'),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.labelLarge,
+              ),
+            ),
+          ),
           IconButton(
             tooltip: 'Settings',
             onPressed: () => _openSettings(context),
@@ -325,14 +342,7 @@ class _SessionsPageState extends State<SessionsPage>
                 _SessionsStatusBanner(text: bannerText),
                 const SizedBox(height: 12),
               ],
-              _ConnectionCard(
-                host: widget.daemonUrl.host,
-                user: _bootstrap.user,
-                voice: _bootstrap.voice,
-                voiceInputController: _effectiveVoiceInputController,
-              ),
               if (isUnsupportedDaemonVersion) ...[
-                const SizedBox(height: 12),
                 _DaemonVersionWarningCard(
                   daemonVersion: _bootstrap.daemonVersion,
                   requiredVersion: _minimumSupportedDaemonVersion,
@@ -365,29 +375,6 @@ class _SessionsPageState extends State<SessionsPage>
                   ),
                 ],
               ),
-              if (_runningSessions.isNotEmpty) ...[
-                const SizedBox(height: 12),
-                _RunningSessionStrip(
-                  api: widget.api,
-                  attachmentPicker: widget.attachmentPicker,
-                  openExternalLink: widget.openExternalLink,
-                  shareAttachments: widget.shareAttachments,
-                  daemonUrl: widget.daemonUrl,
-                  currentUserId: widget.currentUserId,
-                  composerDraftStore: widget.composerDraftStore,
-                  sessionDetailCacheStore: widget.sessionDetailCacheStore,
-                  voiceInputController: _effectiveVoiceInputController,
-                  showDebugTimelineItems: widget.showDebugTimelineItems,
-                  voice: _bootstrap.voice,
-                  token: widget.token,
-                  sessions: _runningSessions,
-                  onDeleteImmediately: _deleteSessionImmediatelyFromDetail,
-                  onRefreshAfterReturn: _refreshSessions,
-                  onSelectSession: widget.onSelectSession,
-                  onSessionExpired: widget.onSessionExpired,
-                  onSignOut: widget.onSignOut,
-                ),
-              ],
               const SizedBox(height: 24),
               AnimatedSwitcher(
                 duration: disableAnimations
@@ -418,6 +405,7 @@ class _SessionsPageState extends State<SessionsPage>
                         currentUserId: widget.currentUserId,
                         composerDraftStore: widget.composerDraftStore,
                         sessionDetailCacheStore: widget.sessionDetailCacheStore,
+                        outboxStore: widget.outboxStore,
                         voiceInputController: _effectiveVoiceInputController,
                         showDebugTimelineItems: widget.showDebugTimelineItems,
                         voice: _bootstrap.voice,
@@ -427,7 +415,6 @@ class _SessionsPageState extends State<SessionsPage>
                         deletingSessionIds: _deletingSessionIds,
                         removingSessionIds: _removingSessionIds,
                         enteringSessionIds: _enteringSessionIds,
-                        onDelete: _deleteSession,
                         onDeleteFromActions: _deleteSessionFromActions,
                         onDeleteImmediately:
                             _deleteSessionImmediatelyFromDetail,
@@ -589,9 +576,11 @@ class _SessionsPageState extends State<SessionsPage>
           currentUserId: widget.currentUserId,
           composerDraftStore: widget.composerDraftStore,
           sessionDetailCacheStore: widget.sessionDetailCacheStore,
+          outboxStore: widget.outboxStore,
           voice: _bootstrap.voice,
           token: widget.token,
           session: created,
+          resumeInBackground: false,
           onDeleteSession: _deleteSessionImmediatelyFromDetail,
           onUnauthorized: widget.onSessionExpired,
         ),
@@ -646,9 +635,11 @@ class _SessionsPageState extends State<SessionsPage>
           currentUserId: widget.currentUserId,
           composerDraftStore: widget.composerDraftStore,
           sessionDetailCacheStore: widget.sessionDetailCacheStore,
+          outboxStore: widget.outboxStore,
           voice: _bootstrap.voice,
           token: widget.token,
           session: attached,
+          resumeInBackground: false,
           onDeleteSession: _deleteSessionImmediatelyFromDetail,
           onUnauthorized: widget.onSessionExpired,
         ),
@@ -681,13 +672,6 @@ class _SessionsPageState extends State<SessionsPage>
     );
 
     return confirmed == true;
-  }
-
-  Future<String?> _deleteSession(SessionSummary session) async {
-    if (!await _confirmDeleteSession(session)) {
-      return null;
-    }
-    return _deleteSessionImmediatelyFromList(session);
   }
 
   Future<String?> _deleteSessionFromActions(SessionSummary session) async {
@@ -746,19 +730,6 @@ class _SessionsPageState extends State<SessionsPage>
         });
       }
     }
-  }
-
-  Future<String?> _deleteSessionImmediatelyFromList(
-    SessionSummary session,
-  ) async {
-    final errorMessage = await _deleteSessionImmediately(session);
-    if (!mounted || errorMessage == null || errorMessage == 'Unauthorized') {
-      return errorMessage;
-    }
-    setState(() {
-      _statusBannerText = errorMessage;
-    });
-    return errorMessage;
   }
 
   Future<bool> _deleteSessionImmediatelyFromDetail(
@@ -908,7 +879,14 @@ class _AppBarConnectionStatus extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 8),
-          Text(host, style: Theme.of(context).textTheme.bodyMedium),
+          Flexible(
+            child: Text(
+              host,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+          ),
         ],
       ),
     );
@@ -1056,63 +1034,6 @@ class _SkeletonLine extends StatelessWidget {
   }
 }
 
-class _ConnectionCard extends StatelessWidget {
-  const _ConnectionCard({
-    required this.host,
-    required this.user,
-    required this.voice,
-    required this.voiceInputController,
-  });
-
-  final String host;
-  final CurrentUser user;
-  final VoiceConfig voice;
-  final VoiceInputController voiceInputController;
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(18),
-        child: Row(
-          children: [
-            Container(
-              width: 10,
-              height: 10,
-              decoration: const BoxDecoration(
-                color: Color(0xFFF0B84A),
-                shape: BoxShape.circle,
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    user.displayName,
-                    style: Theme.of(context).textTheme.titleLarge,
-                  ),
-                  const SizedBox(height: 3),
-                  Text('Connected to $host'),
-                  if (!voice.doubaoDirectAvailable &&
-                      !voiceInputController.isConfigured) ...[
-                    const SizedBox(height: 3),
-                    Text(
-                      'Voice input is not configured',
-                      style: Theme.of(context).textTheme.bodyMedium,
-                    ),
-                  ],
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
 class _SessionList extends StatelessWidget {
   const _SessionList({
     super.key,
@@ -1124,6 +1045,7 @@ class _SessionList extends StatelessWidget {
     required this.currentUserId,
     required this.composerDraftStore,
     required this.sessionDetailCacheStore,
+    required this.outboxStore,
     required this.voiceInputController,
     required this.showDebugTimelineItems,
     required this.voice,
@@ -1133,7 +1055,6 @@ class _SessionList extends StatelessWidget {
     required this.deletingSessionIds,
     required this.removingSessionIds,
     required this.enteringSessionIds,
-    required this.onDelete,
     required this.onDeleteFromActions,
     required this.onDeleteImmediately,
     required this.onRefreshAfterReturn,
@@ -1150,6 +1071,7 @@ class _SessionList extends StatelessWidget {
   final String currentUserId;
   final SessionComposerDraftStore composerDraftStore;
   final SessionDetailCacheStore sessionDetailCacheStore;
+  final SessionOutboxStore outboxStore;
   final VoiceInputController voiceInputController;
   final bool? showDebugTimelineItems;
   final VoiceConfig voice;
@@ -1159,7 +1081,6 @@ class _SessionList extends StatelessWidget {
   final Set<String> deletingSessionIds;
   final Set<String> removingSessionIds;
   final Set<String> enteringSessionIds;
-  final Future<String?> Function(SessionSummary session) onDelete;
   final Future<String?> Function(SessionSummary session) onDeleteFromActions;
   final Future<bool> Function(SessionSummary session) onDeleteImmediately;
   final Future<void> Function() onRefreshAfterReturn;
@@ -1184,6 +1105,7 @@ class _SessionList extends StatelessWidget {
           currentUserId: currentUserId,
           composerDraftStore: composerDraftStore,
           sessionDetailCacheStore: sessionDetailCacheStore,
+          outboxStore: outboxStore,
           voiceInputController: voiceInputController,
           showDebugTimelineItems: showDebugTimelineItems,
           voice: voice,
@@ -1193,7 +1115,6 @@ class _SessionList extends StatelessWidget {
           isDeleting: deletingSessionIds.contains(sessions[index].id),
           isRemoving: removingSessionIds.contains(sessions[index].id),
           isEntering: enteringSessionIds.contains(sessions[index].id),
-          onDelete: onDelete,
           onDeleteFromActions: onDeleteFromActions,
           onDeleteImmediately: onDeleteImmediately,
           onRefreshAfterReturn: onRefreshAfterReturn,
@@ -1202,229 +1123,6 @@ class _SessionList extends StatelessWidget {
           onSignOut: onSignOut,
         );
       },
-    );
-  }
-}
-
-class _RunningSessionStrip extends StatelessWidget {
-  const _RunningSessionStrip({
-    required this.api,
-    required this.attachmentPicker,
-    required this.openExternalLink,
-    required this.shareAttachments,
-    required this.daemonUrl,
-    required this.currentUserId,
-    required this.composerDraftStore,
-    required this.sessionDetailCacheStore,
-    required this.voiceInputController,
-    required this.showDebugTimelineItems,
-    required this.voice,
-    required this.token,
-    required this.sessions,
-    required this.onDeleteImmediately,
-    required this.onRefreshAfterReturn,
-    required this.onSelectSession,
-    required this.onSessionExpired,
-    required this.onSignOut,
-  });
-
-  final DaemonApi api;
-  final ImageAttachmentPicker attachmentPicker;
-  final ExternalLinkOpener openExternalLink;
-  final ShareAttachments shareAttachments;
-  final Uri daemonUrl;
-  final String currentUserId;
-  final SessionComposerDraftStore composerDraftStore;
-  final SessionDetailCacheStore sessionDetailCacheStore;
-  final VoiceInputController voiceInputController;
-  final bool? showDebugTimelineItems;
-  final VoiceConfig voice;
-  final String token;
-  final List<SessionSummary> sessions;
-  final Future<bool> Function(SessionSummary session) onDeleteImmediately;
-  final Future<void> Function() onRefreshAfterReturn;
-  final Future<void> Function(String sessionId) onSelectSession;
-  final Future<void> Function() onSessionExpired;
-  final Future<void> Function() onSignOut;
-
-  @override
-  Widget build(BuildContext context) {
-    final scaledHeight = MediaQuery.textScalerOf(context).scale(112);
-    final stripHeight = scaledHeight > 112.0 ? scaledHeight : 112.0;
-    return Column(
-      key: const ValueKey('running-session-strip'),
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text('Running now', style: Theme.of(context).textTheme.titleLarge),
-        const SizedBox(height: 12),
-        SizedBox(
-          height: stripHeight,
-          child: ListView.separated(
-            scrollDirection: Axis.horizontal,
-            itemCount: sessions.length,
-            separatorBuilder: (_, _) => const SizedBox(width: 12),
-            itemBuilder: (context, index) {
-              final session = sessions[index];
-              return _RunningSessionCard(
-                api: api,
-                attachmentPicker: attachmentPicker,
-                openExternalLink: openExternalLink,
-                shareAttachments: shareAttachments,
-                daemonUrl: daemonUrl,
-                currentUserId: currentUserId,
-                composerDraftStore: composerDraftStore,
-                sessionDetailCacheStore: sessionDetailCacheStore,
-                voiceInputController: voiceInputController,
-                showDebugTimelineItems: showDebugTimelineItems,
-                voice: voice,
-                token: token,
-                session: session,
-                onDeleteImmediately: onDeleteImmediately,
-                onRefreshAfterReturn: onRefreshAfterReturn,
-                onSelectSession: onSelectSession,
-                onSessionExpired: onSessionExpired,
-                onSignOut: onSignOut,
-              );
-            },
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _RunningSessionCard extends StatelessWidget {
-  const _RunningSessionCard({
-    required this.api,
-    required this.attachmentPicker,
-    required this.openExternalLink,
-    required this.shareAttachments,
-    required this.daemonUrl,
-    required this.currentUserId,
-    required this.composerDraftStore,
-    required this.sessionDetailCacheStore,
-    required this.voiceInputController,
-    required this.showDebugTimelineItems,
-    required this.voice,
-    required this.token,
-    required this.session,
-    required this.onDeleteImmediately,
-    required this.onRefreshAfterReturn,
-    required this.onSelectSession,
-    required this.onSessionExpired,
-    required this.onSignOut,
-  });
-
-  final DaemonApi api;
-  final ImageAttachmentPicker attachmentPicker;
-  final ExternalLinkOpener openExternalLink;
-  final ShareAttachments shareAttachments;
-  final Uri daemonUrl;
-  final String currentUserId;
-  final SessionComposerDraftStore composerDraftStore;
-  final SessionDetailCacheStore sessionDetailCacheStore;
-  final VoiceInputController voiceInputController;
-  final bool? showDebugTimelineItems;
-  final VoiceConfig voice;
-  final String token;
-  final SessionSummary session;
-  final Future<bool> Function(SessionSummary session) onDeleteImmediately;
-  final Future<void> Function() onRefreshAfterReturn;
-  final Future<void> Function(String sessionId) onSelectSession;
-  final Future<void> Function() onSessionExpired;
-  final Future<void> Function() onSignOut;
-
-  Future<void> _openSession(BuildContext context) async {
-    final navigator = Navigator.of(context);
-    final resolved = await _resolveSessionForOpen(
-      api: api,
-      token: token,
-      session: session,
-    );
-    final resolvedSession = resolved.summary;
-    unawaited(onSelectSession(resolvedSession.id));
-    await navigator.push(
-      MaterialPageRoute<void>(
-        builder: (_) => SessionDetailPage(
-          api: api,
-          daemonUrl: daemonUrl,
-          attachmentPicker: attachmentPicker,
-          openExternalLink: openExternalLink,
-          shareAttachments: shareAttachments,
-          voiceInputController: voiceInputController,
-          showDebugTimelineItems: showDebugTimelineItems,
-          currentUserId: currentUserId,
-          composerDraftStore: composerDraftStore,
-          sessionDetailCacheStore: sessionDetailCacheStore,
-          voice: voice,
-          token: token,
-          session: resolvedSession,
-          initialSnapshot: resolved.initialSnapshot,
-          onDeleteSession: onDeleteImmediately,
-          onUnauthorized: onSessionExpired,
-        ),
-      ),
-    );
-    if (!navigator.mounted) {
-      return;
-    }
-    unawaited(onRefreshAfterReturn());
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final title = _sessionDisplayTitle(session);
-    return SizedBox(
-      width: 240,
-      child: Card(
-        child: InkWell(
-          borderRadius: BorderRadius.circular(24),
-          onTap: () => _openSession(context),
-          child: Padding(
-            padding: const EdgeInsets.all(14),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Container(
-                      width: 8,
-                      height: 8,
-                      decoration: const BoxDecoration(
-                        color: Color(0xFF43D17A),
-                        shape: BoxShape.circle,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        'Active',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.labelLarge,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  'Resume $title',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.titleLarge,
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  '${session.agentKind} • ${session.sourceKind}',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.bodyMedium,
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
     );
   }
 }
@@ -1439,6 +1137,7 @@ class _SessionRow extends StatelessWidget {
     required this.currentUserId,
     required this.composerDraftStore,
     required this.sessionDetailCacheStore,
+    required this.outboxStore,
     required this.voiceInputController,
     required this.showDebugTimelineItems,
     required this.voice,
@@ -1448,7 +1147,6 @@ class _SessionRow extends StatelessWidget {
     required this.isDeleting,
     required this.isRemoving,
     required this.isEntering,
-    required this.onDelete,
     required this.onDeleteFromActions,
     required this.onDeleteImmediately,
     required this.onRefreshAfterReturn,
@@ -1465,6 +1163,7 @@ class _SessionRow extends StatelessWidget {
   final String currentUserId;
   final SessionComposerDraftStore composerDraftStore;
   final SessionDetailCacheStore sessionDetailCacheStore;
+  final SessionOutboxStore outboxStore;
   final VoiceInputController voiceInputController;
   final bool? showDebugTimelineItems;
   final VoiceConfig voice;
@@ -1474,7 +1173,6 @@ class _SessionRow extends StatelessWidget {
   final bool isDeleting;
   final bool isRemoving;
   final bool isEntering;
-  final Future<String?> Function(SessionSummary session) onDelete;
   final Future<String?> Function(SessionSummary session) onDeleteFromActions;
   final Future<bool> Function(SessionSummary session) onDeleteImmediately;
   final Future<void> Function() onRefreshAfterReturn;
@@ -1499,11 +1197,7 @@ class _SessionRow extends StatelessWidget {
 
   Future<void> _openSession(BuildContext context) async {
     final navigator = Navigator.of(context);
-    final resolved = await _resolveSessionForOpen(
-      api: api,
-      token: token,
-      session: session,
-    );
+    final resolved = _resolveSessionForOpen(session: session);
     final resolvedSession = resolved.summary;
     unawaited(onSelectSession(resolvedSession.id));
     await navigator.push(
@@ -1519,10 +1213,12 @@ class _SessionRow extends StatelessWidget {
           currentUserId: currentUserId,
           composerDraftStore: composerDraftStore,
           sessionDetailCacheStore: sessionDetailCacheStore,
+          outboxStore: outboxStore,
           voice: voice,
           token: token,
           session: resolvedSession,
           initialSnapshot: resolved.initialSnapshot,
+          resumeInBackground: resolved.resumeInBackground,
           onDeleteSession: onDeleteImmediately,
           onUnauthorized: onSessionExpired,
         ),
@@ -1627,28 +1323,25 @@ class _SessionRow extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Expanded(
-                          child: Text(
-                            title,
-                            style: Theme.of(context).textTheme.titleLarge,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                title,
+                                style: Theme.of(context).textTheme.titleLarge,
+                              ),
+                              const SizedBox(height: 12),
+                              Wrap(
+                                spacing: 8,
+                                runSpacing: 8,
+                                children: [
+                                  _MetaChip(label: session.agentKind),
+                                  _StatusPill(label: session.status),
+                                ],
+                              ),
+                            ],
                           ),
                         ),
-                        IconButton(
-                          tooltip: 'Delete session',
-                          onPressed: !canOpenSession || isDeleting || isRemoving
-                              ? null
-                              : () {
-                                  unawaited(onDelete(session));
-                                },
-                          icon: isDeleting || isRemoving
-                              ? const SizedBox.square(
-                                  dimension: 18,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                  ),
-                                )
-                              : const Icon(Icons.delete_outline_rounded),
-                        ),
-                        _StatusPill(label: session.status),
                       ],
                     ),
                     const SizedBox(height: 12),
@@ -1659,15 +1352,6 @@ class _SessionRow extends StatelessWidget {
                       ),
                       const SizedBox(height: 12),
                     ],
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: [
-                        _MetaChip(label: session.agentKind),
-                        _MetaChip(label: session.sourceKind),
-                      ],
-                    ),
-                    const SizedBox(height: 12),
                     Text(
                       workspacePath,
                       maxLines: 2,

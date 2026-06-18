@@ -6,6 +6,9 @@ export interface SessionSummary {
   runtimeSessionId?: string;
   status?: string;
   workspacePath?: string;
+  runtimeHealth?: string;
+  runtimeErrorKind?: string | null;
+  runtimeErrorMessage?: string | null;
 }
 
 export interface ResumeCandidate {
@@ -75,6 +78,9 @@ export interface SessionDetail {
   runtimeSessionId?: string;
   workspacePath?: string;
   status?: string;
+  runtimeHealth?: string;
+  runtimeErrorKind?: string | null;
+  runtimeErrorMessage?: string | null;
   hasMoreHistory?: boolean;
   events: SessionEvent[];
 }

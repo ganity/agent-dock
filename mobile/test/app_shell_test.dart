@@ -8,6 +8,7 @@ import 'package:agent_dock_mobile/src/shared/media/image_attachment_picker.dart'
 import 'package:agent_dock_mobile/src/shared/storage/auth_storage.dart';
 import 'package:agent_dock_mobile/src/shared/storage/session_composer_draft_store.dart';
 import 'package:agent_dock_mobile/src/shared/storage/session_detail_cache_store.dart';
+import 'package:agent_dock_mobile/src/shared/storage/session_outbox_store.dart';
 import 'package:agent_dock_mobile/src/shared/storage/voice_credentials_storage.dart';
 import 'package:agent_dock_mobile/src/shared/voice/doubao_voice_input_controller.dart';
 import 'package:agent_dock_mobile/src/shared/voice/voice_input_controller.dart';
@@ -16,9 +17,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-const _successStatusPillColor = Color(0xFF1E3B2B);
 const _inProgressStatusPillColor = Color(0xFF5C4318);
-const _failureStatusPillColor = Color(0xFF5B2222);
+const _providerVoiceCredentials = DoubaoVoiceCredentials(
+  appId: 'provider-app-id',
+  accessToken: 'provider-access-token',
+  resourceId: 'volc.bigasr.sauc.duration',
+  websocketUrl: 'wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async',
+);
 
 void main() {
   testWidgets('shows daemon setup when no daemon URL has been saved', (
@@ -57,16 +62,16 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(
-        find.widgetWithText(TextField, 'http://10.0.2.2:4123'),
+        find.widgetWithText(TextField, 'https://dockapi.lark.video/'),
         findsOneWidget,
       );
 
       await tester.tap(find.text('Test connection'));
       await tester.pumpAndSettle();
 
-      expect(storage.savedDaemonUrl, Uri.parse('http://10.0.2.2:4123'));
+      expect(storage.savedDaemonUrl, Uri.parse('https://dockapi.lark.video'));
       expect(find.text('Unlock workspace'), findsOneWidget);
-      expect(find.text('10.0.2.2'), findsOneWidget);
+      expect(find.text('dockapi.lark.video'), findsOneWidget);
     },
   );
 
@@ -508,9 +513,9 @@ void main() {
     expect(find.text('Mobile migration'), findsOneWidget);
     expect(find.text('running'), findsOneWidget);
     expect(find.text('codex'), findsOneWidget);
-    expect(find.text('managed'), findsOneWidget);
+    expect(find.text('managed'), findsNothing);
     expect(find.text('/home/jhz/projects/agent-dock'), findsOneWidget);
-    expect(find.text('Voice input is not configured'), findsOneWidget);
+    expect(find.text('Voice input is not configured'), findsNothing);
     expect(find.text('New session'), findsOneWidget);
     expect(find.text('Attach'), findsOneWidget);
   });
@@ -617,13 +622,7 @@ void main() {
       find.widgetWithText(OutlinedButton, 'Attach'),
     );
     expect(attachButton.onPressed, isNull);
-    final deleteButton = tester.widget<IconButton>(
-      find.ancestor(
-        of: find.byTooltip('Delete session'),
-        matching: find.byType(IconButton),
-      ),
-    );
-    expect(deleteButton.onPressed, isNull);
+    expect(find.byTooltip('Delete session'), findsNothing);
 
     await tester.tap(find.widgetWithText(OutlinedButton, 'Change daemon'));
     await tester.pumpAndSettle();
@@ -807,7 +806,7 @@ void main() {
     },
   );
 
-  testWidgets('shows a running session strip above the full sessions list', (
+  testWidgets('shows running sessions only in the main sessions list', (
     tester,
   ) async {
     await pumpApp(
@@ -847,22 +846,12 @@ void main() {
     await tester.tap(find.text('Sign in'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Running now'), findsOneWidget);
-    expect(find.byKey(const ValueKey('running-session-strip')), findsOneWidget);
-    expect(
-      find.descendant(
-        of: find.byKey(const ValueKey('running-session-strip')),
-        matching: find.text('Resume Running session'),
-      ),
-      findsOneWidget,
-    );
-    expect(
-      find.descendant(
-        of: find.byKey(const ValueKey('running-session-strip')),
-        matching: find.text('Resume Idle session'),
-      ),
-      findsNothing,
-    );
+    expect(find.text('Running now'), findsNothing);
+    expect(find.byKey(const ValueKey('running-session-strip')), findsNothing);
+    expect(find.text('Resume Running session'), findsNothing);
+    expect(find.text('Resume Idle session'), findsNothing);
+    expect(find.text('Running session'), findsOneWidget);
+    expect(find.text('Idle session'), findsOneWidget);
   });
 
   testWidgets('long session lists stay fully reachable in the sessions page', (
@@ -906,7 +895,7 @@ void main() {
     expect(find.text('Session 16'), findsOneWidget);
   });
 
-  testWidgets('keeps the running session strip readable at large text scales', (
+  testWidgets('keeps session cards readable at large text scales', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(900, 1400));
@@ -944,9 +933,9 @@ void main() {
     await tester.tap(find.text('Sign in'));
     await tester.pumpAndSettle();
 
-    expect(find.byKey(const ValueKey('running-session-strip')), findsOneWidget);
-    expect(find.text('Running now'), findsOneWidget);
-    expect(find.text('Resume Running session'), findsOneWidget);
+    expect(find.byKey(const ValueKey('running-session-strip')), findsNothing);
+    expect(find.text('Running now'), findsNothing);
+    expect(find.text('Running session'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -1663,117 +1652,757 @@ void main() {
     expect(find.widgetWithText(TextField, 'Message the agent'), findsOneWidget);
   });
 
-  testWidgets('resumes a suspended session before opening details', (
+  testWidgets(
+    'opens a suspended session detail immediately before resume completes',
+    (tester) async {
+      final api = FakeDaemonApi(
+        bootstrap: MobileBootstrap(
+          daemonVersion: '0.1.0',
+          user: const CurrentUser(
+            id: 'usr_workspace',
+            displayName: 'Workspace',
+          ),
+          roots: const <WorkspaceRoot>[],
+          sessions: const [
+            SessionSummary(
+              id: 'sess_1',
+              title: 'Slow resume',
+              agentKind: 'codex',
+              sourceKind: 'managed',
+              runtimeSessionId: 'runtime_1',
+              status: 'suspended',
+              workspacePath: '/tmp/workspace',
+            ),
+          ],
+          voice: const VoiceConfig(doubaoDirectAvailable: false),
+        ),
+        resumeResult: const SessionSnapshot(
+          id: 'sess_1',
+          title: 'Slow resume',
+          agentKind: 'codex',
+          sourceKind: 'managed',
+          runtimeSessionId: 'runtime_1',
+          workspacePath: '/tmp/workspace',
+          status: 'running',
+          hasMoreHistory: false,
+          events: [
+            SessionEvent(
+              id: 3,
+              eventType: 'session.status.changed',
+              payload: {'status': 'running'},
+            ),
+          ],
+        ),
+        snapshot: const SessionSnapshot(
+          id: 'sess_1',
+          title: 'Slow resume',
+          agentKind: 'codex',
+          sourceKind: 'managed',
+          runtimeSessionId: 'runtime_1',
+          workspacePath: '/tmp/workspace',
+          status: 'suspended',
+          hasMoreHistory: false,
+          events: [
+            SessionEvent(
+              id: 2,
+              eventType: 'assistant.message',
+              payload: {'text': 'cached-ish content'},
+            ),
+          ],
+        ),
+        attachDelay: const Duration(milliseconds: 1),
+        resumeDelay: const Duration(seconds: 2),
+        snapshotDelay: const Duration(seconds: 2),
+      );
+
+      await pumpApp(tester, api: api);
+      await tester.enterText(find.byType(TextField).at(0), 'workspace');
+      await tester.enterText(find.byType(TextField).at(1), '1234');
+      await tester.tap(find.text('Sign in'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Slow resume'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
+      expect(find.text('Chat'), findsNothing);
+      expect(
+        find.byKey(const ValueKey('composer-input-surface')),
+        findsOneWidget,
+      );
+
+      await tester.pump(const Duration(seconds: 2));
+      await tester.pump();
+    },
+  );
+
+  testWidgets(
+    'background resume subscribes after the recovered snapshot tail instead of replaying from zero',
+    (tester) async {
+      final resumedEvents = StreamController<SessionEvent>();
+      final api = FakeDaemonApi(
+        liveEventStreams: [resumedEvents.stream],
+        bootstrap: MobileBootstrap(
+          daemonVersion: '0.1.0',
+          user: const CurrentUser(
+            id: 'usr_workspace',
+            displayName: 'Workspace',
+          ),
+          roots: const <WorkspaceRoot>[],
+          sessions: const [
+            SessionSummary(
+              id: 'sess_1',
+              title: 'Resume window',
+              agentKind: 'codex',
+              sourceKind: 'managed',
+              runtimeSessionId: 'runtime_1',
+              status: 'suspended',
+              workspacePath: '/tmp/workspace',
+            ),
+          ],
+          voice: const VoiceConfig(doubaoDirectAvailable: false),
+        ),
+        resumeDelay: const Duration(seconds: 2),
+        snapshotDelay: const Duration(seconds: 2),
+        snapshot: const SessionSnapshot(
+          id: 'sess_1',
+          title: 'Resume window',
+          agentKind: 'codex',
+          sourceKind: 'managed',
+          runtimeSessionId: 'runtime_1',
+          workspacePath: '/tmp/workspace',
+          status: 'suspended',
+          hasMoreHistory: true,
+          events: [
+            SessionEvent(
+              id: 50,
+              eventType: 'assistant.message',
+              payload: {'text': 'window tail'},
+            ),
+          ],
+        ),
+        resumeResult: const SessionSnapshot(
+          id: 'sess_1',
+          title: 'Resume window',
+          agentKind: 'codex',
+          sourceKind: 'managed',
+          runtimeSessionId: 'runtime_1',
+          workspacePath: '/tmp/workspace',
+          status: 'running',
+          hasMoreHistory: true,
+          events: [
+            SessionEvent(
+              id: 50,
+              eventType: 'assistant.message',
+              payload: {'text': 'window tail'},
+            ),
+          ],
+        ),
+      );
+
+      await pumpApp(tester, api: api);
+      await tester.enterText(find.byType(TextField).at(0), 'workspace');
+      await tester.enterText(find.byType(TextField).at(1), '1234');
+      await tester.tap(find.text('Sign in'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Resume window'));
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 2));
+      await tester.pump();
+
+      expect(api.eventSubscriptions, ['sess_1:tok_workspace:50']);
+      await resumedEvents.close();
+    },
+  );
+
+  testWidgets(
+    'opens a running online session detail without starting a background resume',
+    (tester) async {
+      final api = FakeDaemonApi(
+        bootstrap: MobileBootstrap(
+          daemonVersion: '0.1.0',
+          user: const CurrentUser(
+            id: 'usr_workspace',
+            displayName: 'Workspace',
+          ),
+          roots: const <WorkspaceRoot>[],
+          sessions: const [
+            SessionSummary(
+              id: 'sess_1',
+              title: 'Online session',
+              agentKind: 'codex',
+              sourceKind: 'managed',
+              runtimeSessionId: 'runtime_1',
+              runtimeHealth: 'online',
+              status: 'running',
+              workspacePath: '/tmp/workspace',
+            ),
+          ],
+          voice: const VoiceConfig(doubaoDirectAvailable: false),
+        ),
+        snapshot: const SessionSnapshot(
+          id: 'sess_1',
+          title: 'Online session',
+          agentKind: 'codex',
+          sourceKind: 'managed',
+          runtimeSessionId: 'runtime_1',
+          runtimeHealth: 'online',
+          workspacePath: '/tmp/workspace',
+          status: 'running',
+          hasMoreHistory: false,
+          events: [
+            SessionEvent(
+              id: 2,
+              eventType: 'assistant.message',
+              payload: {'text': 'live content'},
+            ),
+          ],
+        ),
+        attachDelay: const Duration(milliseconds: 1),
+      );
+
+      await pumpApp(tester, api: api);
+      await tester.enterText(find.byType(TextField).at(0), 'workspace');
+      await tester.enterText(find.byType(TextField).at(1), '1234');
+      await tester.tap(find.text('Sign in'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Online session'));
+      await tester.pumpAndSettle();
+
+      expect(api.resumedSessions, isEmpty);
+      expect(api.snapshotRequests, ['sess_1:tok_workspace:null']);
+    },
+  );
+
+  testWidgets(
+    'opens a running recoverable-error session detail and starts a background resume',
+    (tester) async {
+      final api = FakeDaemonApi(
+        bootstrap: MobileBootstrap(
+          daemonVersion: '0.1.0',
+          user: const CurrentUser(
+            id: 'usr_workspace',
+            displayName: 'Workspace',
+          ),
+          roots: const <WorkspaceRoot>[],
+          sessions: const [
+            SessionSummary(
+              id: 'sess_1',
+              title: 'Recoverable session',
+              agentKind: 'codex',
+              sourceKind: 'managed',
+              runtimeSessionId: 'runtime_1',
+              runtimeHealth: 'recoverable_error',
+              status: 'running',
+              workspacePath: '/tmp/workspace',
+            ),
+          ],
+          voice: const VoiceConfig(doubaoDirectAvailable: false),
+        ),
+        resumeResult: const SessionSnapshot(
+          id: 'sess_1',
+          title: 'Recoverable session',
+          agentKind: 'codex',
+          sourceKind: 'managed',
+          runtimeSessionId: 'runtime_1',
+          runtimeHealth: 'online',
+          workspacePath: '/tmp/workspace',
+          status: 'running',
+          hasMoreHistory: false,
+          events: [
+            SessionEvent(
+              id: 3,
+              eventType: 'session.status.changed',
+              payload: {'status': 'running'},
+            ),
+          ],
+        ),
+        snapshot: const SessionSnapshot(
+          id: 'sess_1',
+          title: 'Recoverable session',
+          agentKind: 'codex',
+          sourceKind: 'managed',
+          runtimeSessionId: 'runtime_1',
+          runtimeHealth: 'recoverable_error',
+          workspacePath: '/tmp/workspace',
+          status: 'running',
+          hasMoreHistory: false,
+          events: [
+            SessionEvent(
+              id: 2,
+              eventType: 'assistant.message',
+              payload: {'text': 'cached-ish content'},
+            ),
+          ],
+        ),
+        attachDelay: const Duration(milliseconds: 1),
+        resumeDelay: const Duration(seconds: 2),
+        snapshotDelay: const Duration(seconds: 2),
+      );
+
+      await pumpApp(tester, api: api);
+      await tester.enterText(find.byType(TextField).at(0), 'workspace');
+      await tester.enterText(find.byType(TextField).at(1), '1234');
+      await tester.tap(find.text('Sign in'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Recoverable session'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
+      expect(api.resumedSessions, ['sess_1:tok_workspace']);
+      await tester.pump(const Duration(seconds: 2));
+      await tester.pump();
+    },
+  );
+
+  testWidgets(
+    'opens a running provider-error session detail without starting a background resume',
+    (tester) async {
+      final api = FakeDaemonApi(
+        bootstrap: MobileBootstrap(
+          daemonVersion: '0.1.0',
+          user: const CurrentUser(
+            id: 'usr_workspace',
+            displayName: 'Workspace',
+          ),
+          roots: const <WorkspaceRoot>[],
+          sessions: const [
+            SessionSummary(
+              id: 'sess_1',
+              title: 'Provider error session',
+              agentKind: 'codex',
+              sourceKind: 'managed',
+              runtimeSessionId: 'runtime_1',
+              runtimeHealth: 'recoverable_error',
+              runtimeErrorKind: 'provider',
+              status: 'running',
+              workspacePath: '/tmp/workspace',
+            ),
+          ],
+          voice: const VoiceConfig(doubaoDirectAvailable: false),
+        ),
+        snapshot: const SessionSnapshot(
+          id: 'sess_1',
+          title: 'Provider error session',
+          agentKind: 'codex',
+          sourceKind: 'managed',
+          runtimeSessionId: 'runtime_1',
+          runtimeHealth: 'recoverable_error',
+          runtimeErrorKind: 'provider',
+          runtimeErrorMessage: 'compact service returned 502',
+          workspacePath: '/tmp/workspace',
+          status: 'running',
+          hasMoreHistory: false,
+          events: [
+            SessionEvent(
+              id: 2,
+              eventType: 'session.error',
+              payload: {'message': 'compact service returned 502'},
+            ),
+          ],
+        ),
+        attachDelay: const Duration(milliseconds: 1),
+      );
+
+      await pumpApp(tester, api: api);
+      await tester.enterText(find.byType(TextField).at(0), 'workspace');
+      await tester.enterText(find.byType(TextField).at(1), '1234');
+      await tester.tap(find.text('Sign in'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Provider error session'));
+      await tester.pumpAndSettle();
+
+      expect(api.resumedSessions, isEmpty);
+      expect(api.snapshotRequests, ['sess_1:tok_workspace:null']);
+    },
+  );
+
+  testWidgets(
+    'cold opening without cached events subscribes after the latest snapshot event instead of replaying from zero',
+    (tester) async {
+      final resumedEvents = StreamController<SessionEvent>();
+      final api = FakeDaemonApi(
+        liveEventStreams: [resumedEvents.stream],
+        bootstrap: MobileBootstrap(
+          daemonVersion: '0.1.0',
+          user: const CurrentUser(
+            id: 'usr_workspace',
+            displayName: 'Workspace',
+          ),
+          roots: const <WorkspaceRoot>[],
+          sessions: const [
+            SessionSummary(
+              id: 'sess_1',
+              title: 'Open fast',
+              agentKind: 'codex',
+              sourceKind: 'managed',
+              runtimeSessionId: 'runtime_1',
+              status: 'running',
+              workspacePath: '/tmp/workspace',
+            ),
+          ],
+          voice: const VoiceConfig(doubaoDirectAvailable: false),
+        ),
+        snapshotDelay: const Duration(seconds: 2),
+        snapshot: const SessionSnapshot(
+          id: 'sess_1',
+          title: 'Open fast',
+          agentKind: 'codex',
+          sourceKind: 'managed',
+          runtimeSessionId: 'runtime_1',
+          workspacePath: '/tmp/workspace',
+          status: 'running',
+          hasMoreHistory: true,
+          events: [
+            SessionEvent(
+              id: 50,
+              eventType: 'assistant.message',
+              payload: {'text': 'latest window tail'},
+            ),
+          ],
+        ),
+      );
+
+      await pumpApp(tester, api: api);
+      await tester.enterText(find.byType(TextField).at(0), 'workspace');
+      await tester.enterText(find.byType(TextField).at(1), '1234');
+      await tester.tap(find.text('Sign in'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Open fast'));
+      await tester.pump();
+
+      expect(api.eventSubscriptions, isNot(contains('sess_1:tok_workspace:0')));
+
+      await tester.pump(const Duration(seconds: 2));
+      await tester.pump();
+      expect(api.eventSubscriptions, ['sess_1:tok_workspace:50']);
+      await resumedEvents.close();
+    },
+  );
+
+  testWidgets(
+    'cold opening without cached events shows the snapshot window before streaming newer events',
+    (tester) async {
+      final resumedEvents = StreamController<SessionEvent>();
+      final api = FakeDaemonApi(
+        liveEventStreams: [resumedEvents.stream],
+        bootstrap: const MobileBootstrap(
+          daemonVersion: '0.1.0',
+          user: CurrentUser(id: 'usr_workspace', displayName: 'Workspace'),
+          roots: <WorkspaceRoot>[],
+          sessions: [
+            SessionSummary(
+              id: 'sess_1',
+              title: 'Live first',
+              agentKind: 'codex',
+              sourceKind: 'managed',
+              runtimeSessionId: 'runtime_1',
+              status: 'running',
+              workspacePath: '/tmp/workspace',
+            ),
+          ],
+          voice: VoiceConfig(doubaoDirectAvailable: false),
+        ),
+        snapshotDelay: const Duration(seconds: 2),
+        snapshot: const SessionSnapshot(
+          id: 'sess_1',
+          title: 'Live first',
+          agentKind: 'codex',
+          sourceKind: 'managed',
+          runtimeSessionId: 'runtime_1',
+          workspacePath: '/tmp/workspace',
+          status: 'running',
+          hasMoreHistory: true,
+          events: [
+            SessionEvent(
+              id: 50,
+              eventType: 'user.message',
+              payload: {'text': 'window tail'},
+            ),
+          ],
+        ),
+      );
+
+      await pumpApp(tester, api: api);
+      await tester.enterText(find.byType(TextField).at(0), 'workspace');
+      await tester.enterText(find.byType(TextField).at(1), '1234');
+      await tester.tap(find.text('Sign in'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Live first'));
+      await tester.pump();
+
+      expect(find.text('window tail'), findsNothing);
+      expect(find.text('streamed before snapshot'), findsNothing);
+
+      await tester.pump(const Duration(seconds: 2));
+      await tester.pump();
+      expect(find.text('window tail'), findsOneWidget);
+      resumedEvents.add(
+        const SessionEvent(
+          id: 51,
+          eventType: 'assistant.message',
+          payload: {'text': 'streamed before snapshot'},
+        ),
+      );
+      await tester.pump();
+      expect(api.eventSubscriptions, ['sess_1:tok_workspace:50']);
+      await resumedEvents.close();
+    },
+  );
+
+  testWidgets('shows an inline offline banner when background resume fails', (
     tester,
   ) async {
     final api = FakeDaemonApi(
-      bootstrap: MobileBootstrap(
+      bootstrap: const MobileBootstrap(
         daemonVersion: '0.1.0',
-        user: const CurrentUser(id: 'usr_workspace', displayName: 'Workspace'),
-        roots: const <WorkspaceRoot>[],
-        sessions: const [
+        user: CurrentUser(id: 'usr_workspace', displayName: 'Workspace'),
+        roots: <WorkspaceRoot>[],
+        sessions: [
           SessionSummary(
             id: 'sess_1',
-            title: 'Mobile migration',
+            title: 'Resume fails',
             agentKind: 'codex',
             sourceKind: 'managed',
             runtimeSessionId: 'runtime_1',
             status: 'suspended',
-            workspacePath: '/home/jhz/projects/agent-dock',
+            workspacePath: '/tmp/workspace',
           ),
         ],
-        voice: const VoiceConfig(doubaoDirectAvailable: false),
+        voice: VoiceConfig(doubaoDirectAvailable: false),
       ),
-      resumeResult: const SessionSnapshot(
+      snapshot: const SessionSnapshot(
         id: 'sess_1',
-        title: 'Mobile migration',
+        title: 'Resume fails',
         agentKind: 'codex',
         sourceKind: 'managed',
         runtimeSessionId: 'runtime_1',
-        workspacePath: '/home/jhz/projects/agent-dock',
-        status: 'running',
+        workspacePath: '/tmp/workspace',
+        status: 'suspended',
         hasMoreHistory: false,
-        events: [
-          SessionEvent(
-            id: 12,
-            eventType: 'session.status.changed',
-            payload: {'status': 'running'},
-          ),
-        ],
+        events: [],
       ),
+      resumeDelay: const Duration(milliseconds: 50),
+      resumeError: const SocketException('network down'),
     );
-    await pumpApp(tester, api: api);
 
+    await pumpApp(tester, api: api);
     await tester.enterText(find.byType(TextField).at(0), 'workspace');
     await tester.enterText(find.byType(TextField).at(1), '1234');
     await tester.tap(find.text('Sign in'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Mobile migration'));
-    await tester.pumpAndSettle();
 
-    expect(api.resumedSessions, ['sess_1:tok_workspace']);
-    expect(api.snapshotRequests, isEmpty);
+    await tester.tap(find.text('Resume fails'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 60));
+
+    expect(find.text('Offline. Waiting for network...'), findsOneWidget);
     expect(
-      find.descendant(
-        of: find.byKey(const ValueKey('session-status-pill')),
-        matching: find.text('running'),
-      ),
+      find.byKey(const ValueKey('composer-input-surface')),
       findsOneWidget,
     );
   });
 
   testWidgets(
-    'opens a resumed session at the latest message from the initial snapshot',
+    'keeps the newer streamed status when a stale snapshot resolves later',
     (tester) async {
-      final events = List<SessionEvent>.generate(24, (index) {
-        final eventNumber = index + 1;
-        return SessionEvent(
-          id: eventNumber,
-          eventType: eventNumber.isEven ? 'assistant.message' : 'user.message',
-          payload: {'text': 'resumed event $eventNumber'},
-        );
-      });
+      final resumedEvents = StreamController<SessionEvent>();
       final api = FakeDaemonApi(
-        bootstrap: MobileBootstrap(
+        liveEventStreams: [resumedEvents.stream],
+        bootstrap: const MobileBootstrap(
           daemonVersion: '0.1.0',
-          user: const CurrentUser(id: 'usr_workspace', displayName: 'Workspace'),
-          roots: const <WorkspaceRoot>[],
-          sessions: const [
+          user: CurrentUser(id: 'usr_workspace', displayName: 'Workspace'),
+          roots: <WorkspaceRoot>[],
+          sessions: [
             SessionSummary(
               id: 'sess_1',
-              title: 'Mobile migration',
+              title: 'Status race',
               agentKind: 'codex',
               sourceKind: 'managed',
               runtimeSessionId: 'runtime_1',
-              status: 'suspended',
-              workspacePath: '/home/jhz/projects/agent-dock',
+              status: 'idle',
+              workspacePath: '/tmp/workspace',
             ),
           ],
           voice: VoiceConfig(doubaoDirectAvailable: false),
         ),
-        resumeResult: SessionSnapshot(
+        snapshotDelay: const Duration(seconds: 2),
+        snapshot: const SessionSnapshot(
           id: 'sess_1',
-          title: 'Mobile migration',
+          title: 'Status race',
           agentKind: 'codex',
           sourceKind: 'managed',
           runtimeSessionId: 'runtime_1',
-          workspacePath: '/home/jhz/projects/agent-dock',
-          status: 'running',
+          workspacePath: '/tmp/workspace',
+          status: 'suspended',
           hasMoreHistory: false,
-          events: events,
+          events: [],
         ),
       );
-      await pumpApp(tester, api: api);
 
+      await pumpApp(tester, api: api);
       await tester.enterText(find.byType(TextField).at(0), 'workspace');
       await tester.enterText(find.byType(TextField).at(1), '1234');
       await tester.tap(find.text('Sign in'));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Mobile migration'));
+
+      await tester.tap(find.text('Status race'));
+      await tester.pump();
+
+      resumedEvents.add(
+        const SessionEvent(
+          id: 4,
+          eventType: 'session.status.changed',
+          payload: {'status': 'running'},
+        ),
+      );
+      await tester.pump();
+
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('session-status-pill')),
+          matching: find.text('running'),
+        ),
+        findsOneWidget,
+      );
+
+      await tester.pump(const Duration(seconds: 2));
+      await tester.pump();
+
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('session-status-pill')),
+          matching: find.text('running'),
+        ),
+        findsOneWidget,
+      );
+
+      await resumedEvents.close();
+    },
+  );
+
+  testWidgets('heartbeat timeout forces session event stream reconnect', (
+    tester,
+  ) async {
+    final silentEvents = StreamController<SessionEvent>();
+    final lateEvents = StreamController<SessionEvent>();
+    final api = FakeDaemonApi(
+      liveEventStreams: [silentEvents.stream, lateEvents.stream],
+      bootstrap: const MobileBootstrap(
+        daemonVersion: '0.1.0',
+        user: CurrentUser(id: 'usr_workspace', displayName: 'Workspace'),
+        roots: <WorkspaceRoot>[],
+        sessions: [
+          SessionSummary(
+            id: 'sess_1',
+            title: 'Heartbeat timeout',
+            agentKind: 'codex',
+            sourceKind: 'managed',
+            runtimeSessionId: 'runtime_1',
+            status: 'running',
+            workspacePath: '/tmp/workspace',
+          ),
+        ],
+        voice: VoiceConfig(doubaoDirectAvailable: false),
+      ),
+      snapshot: const SessionSnapshot(
+        id: 'sess_1',
+        title: 'Heartbeat timeout',
+        agentKind: 'codex',
+        sourceKind: 'managed',
+        runtimeSessionId: 'runtime_1',
+        workspacePath: '/tmp/workspace',
+        status: 'running',
+        hasMoreHistory: false,
+        events: [],
+      ),
+    );
+
+    await pumpApp(tester, api: api);
+    await tester.enterText(find.byType(TextField).at(0), 'workspace');
+    await tester.enterText(find.byType(TextField).at(1), '1234');
+    await tester.tap(find.text('Sign in'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Heartbeat timeout'));
+    await tester.pump();
+
+    await tester.pump(const Duration(seconds: 65));
+    await tester.pump();
+
+    expect(api.eventSubscriptions, [
+      'sess_1:tok_workspace:0',
+      'sess_1:tok_workspace:0',
+    ]);
+
+    await tester.pageBack();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+  });
+
+  testWidgets(
+    'session heartbeat keeps the stream alive without rendering timeline events',
+    (tester) async {
+      final heartbeatEvents = StreamController<SessionEvent>();
+      final api = FakeDaemonApi(
+        liveEventStreams: [heartbeatEvents.stream],
+        bootstrap: const MobileBootstrap(
+          daemonVersion: '0.1.0',
+          user: CurrentUser(id: 'usr_workspace', displayName: 'Workspace'),
+          roots: <WorkspaceRoot>[],
+          sessions: [
+            SessionSummary(
+              id: 'sess_1',
+              title: 'Heartbeat keepalive',
+              agentKind: 'codex',
+              sourceKind: 'managed',
+              runtimeSessionId: 'runtime_1',
+              status: 'running',
+              workspacePath: '/tmp/workspace',
+            ),
+          ],
+          voice: VoiceConfig(doubaoDirectAvailable: false),
+        ),
+        snapshot: const SessionSnapshot(
+          id: 'sess_1',
+          title: 'Heartbeat keepalive',
+          agentKind: 'codex',
+          sourceKind: 'managed',
+          runtimeSessionId: 'runtime_1',
+          workspacePath: '/tmp/workspace',
+          status: 'running',
+          hasMoreHistory: false,
+          events: [],
+        ),
+      );
+
+      await pumpApp(tester, api: api);
+      await tester.enterText(find.byType(TextField).at(0), 'workspace');
+      await tester.enterText(find.byType(TextField).at(1), '1234');
+      await tester.tap(find.text('Sign in'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Heartbeat keepalive'));
       await tester.pumpAndSettle();
 
-      expect(find.text('resumed event 24'), findsOneWidget);
-      expect(find.text('resumed event 1'), findsNothing);
+      await tester.pump(const Duration(seconds: 30));
+      heartbeatEvents.add(
+        const SessionEvent(id: 0, eventType: 'session.heartbeat', payload: {}),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 35));
+      await tester.pump();
+
+      expect(api.eventSubscriptions, ['sess_1:tok_workspace:0']);
+      expect(find.text('No session events yet'), findsOneWidget);
+
+      await tester.pageBack();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
     },
   );
 
@@ -4696,7 +5325,10 @@ void main() {
 
       await tester.pump(const Duration(milliseconds: 700));
 
-      expect(tester.widget<Opacity>(opacityFinder).opacity, isNot(initialOpacity));
+      expect(
+        tester.widget<Opacity>(opacityFinder).opacity,
+        isNot(initialOpacity),
+      );
     },
   );
 
@@ -6129,6 +6761,14 @@ void main() {
     await tester.tap(find.text('Tool progress'));
     await tester.pumpAndSettle();
 
+    expect(find.text('npm test'), findsOneWidget);
+    expect(find.text('1 file · src/app.ts'), findsOneWidget);
+
+    await tester.tap(find.text('npm test'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('1 file · src/app.ts'));
+    await tester.pumpAndSettle();
+
     expect(find.widgetWithText(Chip, 'inProgress'), findsNWidgets(2));
     for (final chip in tester.widgetList<Chip>(
       find.widgetWithText(Chip, 'inProgress'),
@@ -6173,12 +6813,8 @@ void main() {
       findsOneWidget,
     );
 
-    await tester.tap(find.text('npm test'));
-    await tester.pumpAndSettle();
     expect(find.text('Waiting for output...'), findsOneWidget);
 
-    await tester.tap(find.text('1 file · src/app.ts'));
-    await tester.pumpAndSettle();
     expect(find.text('Preparing changes...'), findsOneWidget);
   });
 
@@ -6324,6 +6960,8 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('Tool completion transition'));
       await tester.pumpAndSettle();
+      await tester.tap(find.text('npm test'));
+      await tester.pumpAndSettle();
 
       expect(
         find.byKey(const ValueKey('tool-call-in-progress-spinner')),
@@ -6355,7 +6993,10 @@ void main() {
         find.byKey(const ValueKey('tool-call-in-progress-spinner')),
         findsOneWidget,
       );
-      expect(find.byIcon(Icons.check_circle_outline), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('tool-status-complete')),
+        findsOneWidget,
+      );
 
       await tester.pump(const Duration(milliseconds: 250));
 
@@ -6363,7 +7004,10 @@ void main() {
         find.byKey(const ValueKey('tool-call-in-progress-spinner')),
         findsNothing,
       );
-      expect(find.byIcon(Icons.check_circle_outline), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('tool-status-complete')),
+        findsOneWidget,
+      );
 
       await liveEvents.close();
     },
@@ -6535,14 +7179,14 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('File change completion transition'));
       await tester.pumpAndSettle();
+      await tester.tap(find.text('1 file · src/app.ts'));
+      await tester.pumpAndSettle();
 
       expect(
         find.byKey(const ValueKey('file-change-completion-icon')),
         findsNothing,
       );
       expect(find.widgetWithText(Chip, 'inProgress'), findsOneWidget);
-      await tester.tap(find.text('2 files · src/app.ts'));
-      await tester.pumpAndSettle();
       expect(find.text('Preparing changes...'), findsOneWidget);
 
       liveEvents.add(
@@ -6663,6 +7307,8 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('1 file · src/app.ts'), findsOneWidget);
+    await tester.tap(find.text('1 file · src/app.ts'));
+    await tester.pumpAndSettle();
     final fileCard = find.byKey(
       const ValueKey('timeline-item-fileChange:patch-1'),
     );
@@ -6781,12 +7427,13 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Files changed'), findsNothing);
-      expect(find.text('2 files'), findsOneWidget);
+      expect(find.text('2 files · src/app.ts'), findsOneWidget);
       expect(find.text('Edited 2 files'), findsNothing);
 
       await tester.tap(find.text('2 files · src/app.ts'));
       await tester.pumpAndSettle();
 
+      expect(find.text('2 files'), findsOneWidget);
       expect(find.text('src/app.ts'), findsOneWidget);
       expect(find.text('src/lib.rs'), findsOneWidget);
       expect(find.text('No changes'), findsNothing);
@@ -6897,11 +7544,13 @@ void main() {
     );
 
     await tester.pump(const Duration(seconds: 1));
+    await tester.pump();
 
     expect(
-      find.byKey(const ValueKey('chat-timeline-initial-fade')),
+      find.byKey(const ValueKey('session-timeline-expanded')),
       findsOneWidget,
     );
+    expect(find.byKey(const ValueKey('chat-timeline-skeleton')), findsNothing);
 
     await tester.pumpAndSettle();
   });
@@ -7286,7 +7935,7 @@ void main() {
         find.byType(TextField).last,
       );
       expect(composerField.controller?.text, 'continue the Flutter work');
-      expect(find.text('screenshot.png'), findsOneWidget);
+      expect(find.text('screenshot.png'), findsAtLeastNWidgets(1));
       expect(find.text('Cannot send right now'), findsOneWidget);
       expect(find.byKey(const ValueKey('composer-retry-send')), findsOneWidget);
       expect(
@@ -7308,7 +7957,7 @@ void main() {
         find.byType(TextField).last,
       );
       expect(keptEditingField.controller?.text, 'continue the Flutter work');
-      expect(find.text('screenshot.png'), findsOneWidget);
+      expect(find.text('screenshot.png'), findsAtLeastNWidgets(1));
       expect(find.text('Cannot send right now'), findsNothing);
     },
   );
@@ -7530,6 +8179,150 @@ void main() {
     expect(composerField.controller?.text, isEmpty);
     expect(find.text('screenshot.png'), findsNothing);
     expect(find.text('Send failed. Retry'), findsNothing);
+  });
+
+  testWidgets('failed send keeps a retryable pending message visible', (
+    tester,
+  ) async {
+    final outboxStore = MemorySessionOutboxStore();
+    final api = FakeDaemonApi(
+      bootstrap: const MobileBootstrap(
+        daemonVersion: '0.1.0',
+        user: CurrentUser(id: 'usr_workspace', displayName: 'Workspace'),
+        roots: <WorkspaceRoot>[],
+        sessions: [
+          SessionSummary(
+            id: 'sess_1',
+            title: 'Pending send',
+            agentKind: 'codex',
+            sourceKind: 'managed',
+            runtimeSessionId: 'runtime_1',
+            status: 'running',
+            workspacePath: '/tmp/workspace',
+          ),
+        ],
+        voice: VoiceConfig(doubaoDirectAvailable: false),
+      ),
+      snapshot: const SessionSnapshot(
+        id: 'sess_1',
+        title: 'Pending send',
+        agentKind: 'codex',
+        sourceKind: 'managed',
+        runtimeSessionId: 'runtime_1',
+        workspacePath: '/tmp/workspace',
+        status: 'running',
+        hasMoreHistory: false,
+        events: [],
+      ),
+      sendMessageErrors: const <Object>[SocketException('offline')],
+    );
+
+    await pumpApp(tester, api: api, outboxStore: outboxStore);
+    await tester.enterText(find.byType(TextField).at(0), 'workspace');
+    await tester.enterText(find.byType(TextField).at(1), '1234');
+    await tester.tap(find.text('Sign in'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Pending send'));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Message the agent'),
+      'hello',
+    );
+    await tester.pump();
+    await tester.tap(find.byIcon(Icons.arrow_upward_rounded));
+    await tester.pumpAndSettle();
+
+    final entries = outboxStore.listEntries(
+      scope: SessionOutboxScope(
+        daemonUrl: Uri.parse('https://daemon.example.com'),
+        userId: 'usr_workspace',
+        sessionId: 'sess_1',
+      ),
+    );
+    expect(find.text('Offline. Waiting for network...'), findsOneWidget);
+    expect(find.text('hello'), findsAtLeastNWidgets(1));
+    expect(find.byKey(const ValueKey('composer-retry-send')), findsOneWidget);
+
+    expect(entries, hasLength(1));
+    expect(entries.single.text, 'hello');
+    expect(entries.single.status, SessionOutboxStatus.failedRetryable);
+  });
+
+  testWidgets('snapshot user.message with matching clientMessageId clears pending outbox echo', (
+    tester,
+  ) async {
+    final outboxStore = MemorySessionOutboxStore();
+    const pendingEntry = SessionOutboxEntry(
+      clientMessageId: 'cli_1',
+      text: 'hello',
+      imagePaths: <String>[],
+      createdAtMillis: 1,
+      status: SessionOutboxStatus.failedRetryable,
+    );
+    outboxStore.saveEntry(
+      scope: SessionOutboxScope(
+        daemonUrl: Uri.parse('https://daemon.example.com'),
+        userId: 'usr_workspace',
+        sessionId: 'sess_1',
+      ),
+      entry: pendingEntry,
+    );
+    final api = FakeDaemonApi(
+      bootstrap: const MobileBootstrap(
+        daemonVersion: '0.1.0',
+        user: CurrentUser(id: 'usr_workspace', displayName: 'Workspace'),
+        roots: <WorkspaceRoot>[],
+        sessions: [
+          SessionSummary(
+            id: 'sess_1',
+            title: 'Pending send',
+            agentKind: 'codex',
+            sourceKind: 'managed',
+            runtimeSessionId: 'runtime_1',
+            status: 'running',
+            workspacePath: '/tmp/workspace',
+          ),
+        ],
+        voice: VoiceConfig(doubaoDirectAvailable: false),
+      ),
+      snapshot: const SessionSnapshot(
+        id: 'sess_1',
+        title: 'Pending send',
+        agentKind: 'codex',
+        sourceKind: 'managed',
+        runtimeSessionId: 'runtime_1',
+        workspacePath: '/tmp/workspace',
+        status: 'running',
+        hasMoreHistory: false,
+        events: [
+          SessionEvent(
+            id: 1,
+            eventType: 'user.message',
+            payload: {'text': 'hello', 'clientMessageId': 'cli_1'},
+          ),
+        ],
+      ),
+    );
+
+    await pumpApp(tester, api: api, outboxStore: outboxStore);
+    await tester.enterText(find.byType(TextField).at(0), 'workspace');
+    await tester.enterText(find.byType(TextField).at(1), '1234');
+    await tester.tap(find.text('Sign in'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Pending send'));
+    await tester.pumpAndSettle();
+
+    final entries = outboxStore.listEntries(
+      scope: SessionOutboxScope(
+        daemonUrl: Uri.parse('https://daemon.example.com'),
+        userId: 'usr_workspace',
+        sessionId: 'sess_1',
+      ),
+    );
+    expect(entries, isEmpty);
+    expect(find.byKey(const ValueKey('composer-retry-send')), findsNothing);
+    expect(find.text('hello'), findsOneWidget);
   });
 
   testWidgets('composer text field grows up to five lines before scrolling', (
@@ -7956,90 +8749,102 @@ void main() {
         find.byKey(const ValueKey('chat-timeline-skeleton')),
         findsNothing,
       );
-      expect(api.snapshotRequests, ['sess_1:tok_workspace:null']);
+      expect(api.snapshotRequests, [
+        'sess_1:tok_workspace:null',
+        'sess_1:tok_workspace:null',
+      ]);
+      expect(api.eventSubscriptions, [
+        'sess_1:tok_workspace:1',
+        'sess_1:tok_workspace:1',
+      ]);
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pumpAndSettle();
       await tester.pumpAndSettle();
       expect(find.text('cached result'), findsOneWidget);
     },
   );
 
-  testWidgets(
-    'reopening the same session opens at the latest message',
-    (tester) async {
-      final events = List<SessionEvent>.generate(24, (index) {
-        return SessionEvent(
-          id: index + 1,
-          eventType: index.isEven ? 'assistant.message' : 'user.message',
-          payload: {
-            'text':
-                'message $index\nline two for $index\nline three for $index',
-          },
-        );
-      });
-      final api = FakeDaemonApi(
-        bootstrap: const MobileBootstrap(
-          daemonVersion: '0.1.0',
-          user: CurrentUser(id: 'usr_workspace', displayName: 'Workspace'),
-          roots: <WorkspaceRoot>[],
-          sessions: [
-            SessionSummary(
-              id: 'sess_1',
-              title: 'Mobile migration',
-              agentKind: 'codex',
-              sourceKind: 'managed',
-              runtimeSessionId: 'runtime_1',
-              status: 'running',
-              workspacePath: '/home/jhz/projects/agent-dock',
-            ),
-          ],
-          voice: VoiceConfig(doubaoDirectAvailable: false),
-        ),
-        snapshot: SessionSnapshot(
-          id: 'sess_1',
-          title: 'Mobile migration',
-          agentKind: 'codex',
-          sourceKind: 'managed',
-          runtimeSessionId: 'runtime_1',
-          workspacePath: '/home/jhz/projects/agent-dock',
-          status: 'running',
-          hasMoreHistory: false,
-          events: events,
-        ),
+  testWidgets('reopening the same session opens at the latest message', (
+    tester,
+  ) async {
+    final events = List<SessionEvent>.generate(24, (index) {
+      return SessionEvent(
+        id: index + 1,
+        eventType: index.isEven ? 'assistant.message' : 'user.message',
+        payload: {
+          'text': 'message $index\nline two for $index\nline three for $index',
+        },
       );
-      await pumpApp(tester, api: api);
+    });
+    final api = FakeDaemonApi(
+      bootstrap: const MobileBootstrap(
+        daemonVersion: '0.1.0',
+        user: CurrentUser(id: 'usr_workspace', displayName: 'Workspace'),
+        roots: <WorkspaceRoot>[],
+        sessions: [
+          SessionSummary(
+            id: 'sess_1',
+            title: 'Mobile migration',
+            agentKind: 'codex',
+            sourceKind: 'managed',
+            runtimeSessionId: 'runtime_1',
+            status: 'running',
+            workspacePath: '/home/jhz/projects/agent-dock',
+          ),
+        ],
+        voice: VoiceConfig(doubaoDirectAvailable: false),
+      ),
+      snapshot: SessionSnapshot(
+        id: 'sess_1',
+        title: 'Mobile migration',
+        agentKind: 'codex',
+        sourceKind: 'managed',
+        runtimeSessionId: 'runtime_1',
+        workspacePath: '/home/jhz/projects/agent-dock',
+        status: 'running',
+        hasMoreHistory: false,
+        events: events,
+      ),
+    );
+    await pumpApp(tester, api: api);
 
-      await tester.enterText(find.byType(TextField).at(0), 'workspace');
-      await tester.enterText(find.byType(TextField).at(1), '1234');
-      await tester.tap(find.text('Sign in'));
-      await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField).at(0), 'workspace');
+    await tester.enterText(find.byType(TextField).at(1), '1234');
+    await tester.tap(find.text('Sign in'));
+    await tester.pumpAndSettle();
 
-      await tester.tap(find.text('Mobile migration'));
-      await tester.pumpAndSettle();
+    await tester.tap(find.text('Mobile migration'));
+    await tester.pumpAndSettle();
 
-      final timelineFinder = find.byType(ListView).last;
-      await tester.drag(timelineFinder, const Offset(0, 800));
-      await tester.pumpAndSettle();
-      final scrolledOffset = tester
-          .widget<ListView>(timelineFinder)
-          .controller!
-          .offset;
-      expect(scrolledOffset, greaterThan(0));
+    final timelineFinder = find.byType(ListView).last;
+    await tester.drag(timelineFinder, const Offset(0, 800));
+    await tester.pumpAndSettle();
+    final scrolledOffset = tester
+        .widget<ListView>(timelineFinder)
+        .controller!
+        .offset;
+    expect(scrolledOffset, greaterThan(0));
 
-      await tester.pageBack();
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Mobile migration'));
-      await tester.pumpAndSettle();
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Mobile migration'));
+    await tester.pumpAndSettle();
 
-      final reopenedTimeline = tester.widget<ListView>(find.byType(ListView).last);
-      final reopenedController = reopenedTimeline.controller!;
-      expect(
-        reopenedController.offset,
-        closeTo(reopenedController.position.maxScrollExtent, 1),
-      );
-      expect(find.textContaining('message 23'), findsOneWidget);
-      expect(find.textContaining('message 0'), findsNothing);
-      expect(api.snapshotRequests, ['sess_1:tok_workspace:null']);
-    },
-  );
+    final reopenedTimeline = tester.widget<ListView>(
+      find.byType(ListView).last,
+    );
+    final reopenedController = reopenedTimeline.controller!;
+    expect(
+      reopenedController.offset,
+      closeTo(reopenedController.position.maxScrollExtent, 1),
+    );
+    expect(find.textContaining('message 23'), findsOneWidget);
+    expect(find.textContaining('message 0'), findsNothing);
+    expect(api.snapshotRequests, [
+      'sess_1:tok_workspace:null',
+      'sess_1:tok_workspace:null',
+    ]);
+  });
 
   testWidgets('appends live session events after opening a session', (
     tester,
@@ -8111,7 +8916,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(api.eventSubscriptions, ['sess_1:tok_workspace:1']);
+    expect(api.eventSubscriptions, ['sess_1:tok_workspace:0']);
     expect(find.text('initial prompt'), findsOneWidget);
     expect(find.text('live assistant reply'), findsOneWidget);
 
@@ -8803,7 +9608,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(api.eventSubscriptions, [
-      'sess_1:tok_workspace:5',
+      'sess_1:tok_workspace:0',
       'sess_1:tok_workspace:5',
     ]);
     expect(find.text('reconnected reply'), findsOneWidget);
@@ -8899,11 +9704,16 @@ void main() {
   testWidgets('shows still reconnecting after repeated event stream failures', (
     tester,
   ) async {
+    Stream<SessionEvent> socketClosedStream(String label) =>
+        Stream<SessionEvent>.multi((controller) {
+          controller.addError(Exception(label));
+          controller.close();
+        });
     final api = FakeDaemonApi(
       liveEventStreams: [
-        Stream<SessionEvent>.error(Exception('socket closed 1')),
-        Stream<SessionEvent>.error(Exception('socket closed 2')),
-        Stream<SessionEvent>.error(Exception('socket closed 3')),
+        socketClosedStream('socket closed 1'),
+        socketClosedStream('socket closed 2'),
+        socketClosedStream('socket closed 3'),
       ],
       bootstrap: MobileBootstrap(
         daemonVersion: '0.1.0',
@@ -8957,7 +9767,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(api.eventSubscriptions, [
-      'sess_1:tok_workspace:5',
+      'sess_1:tok_workspace:0',
       'sess_1:tok_workspace:5',
       'sess_1:tok_workspace:5',
     ]);
@@ -9028,14 +9838,14 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(api.eventSubscriptions, [
-      'sess_1:tok_workspace:5',
+      'sess_1:tok_workspace:0',
       'sess_1:tok_workspace:5',
     ]);
 
     await tester.pump(const Duration(seconds: 1));
     await tester.pump();
     expect(api.eventSubscriptions, [
-      'sess_1:tok_workspace:5',
+      'sess_1:tok_workspace:0',
       'sess_1:tok_workspace:5',
     ]);
   });
@@ -9043,12 +9853,15 @@ void main() {
   testWidgets('resuming the app reconnects the session event stream', (
     tester,
   ) async {
+    var firstSubscriptionCanceled = false;
     final resumedEvents = StreamController<SessionEvent>();
+    final initialEvents = StreamController<SessionEvent>(
+      onCancel: () {
+        firstSubscriptionCanceled = true;
+      },
+    );
     final api = FakeDaemonApi(
-      liveEventStreams: [
-        const Stream<SessionEvent>.empty(),
-        resumedEvents.stream,
-      ],
+      liveEventStreams: [initialEvents.stream, resumedEvents.stream],
       bootstrap: const MobileBootstrap(
         daemonVersion: '0.1.0',
         user: CurrentUser(id: 'usr_workspace', displayName: 'Workspace'),
@@ -9093,11 +9906,16 @@ void main() {
     await tester.tap(find.text('Mobile migration'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Connecting to event stream...'), findsOneWidget);
+    expect(api.eventSubscriptions, ['sess_1:tok_workspace:0']);
 
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    await tester.pump();
+
+    expect(firstSubscriptionCanceled, isTrue);
+    expect(api.eventSubscriptions, ['sess_1:tok_workspace:0']);
+
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
@@ -9110,17 +9928,203 @@ void main() {
         payload: {'text': 'reply after resume'},
       ),
     );
-    await tester.pumpAndSettle();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
 
     expect(api.eventSubscriptions, [
-      'sess_1:tok_workspace:5',
+      'sess_1:tok_workspace:0',
       'sess_1:tok_workspace:5',
     ]);
     expect(find.text('reply after resume'), findsOneWidget);
     expect(find.text('Connecting to event stream...'), findsNothing);
-
-    await resumedEvents.close();
   });
+
+  testWidgets(
+    'stream repair falls back to snapshot when reconnect continuity is lost',
+    (tester) async {
+      Stream<SessionEvent> socketClosedStream(String label) =>
+          Stream<SessionEvent>.multi((controller) {
+            controller.addError(Exception(label));
+            controller.close();
+          });
+      final api = FakeDaemonApi(
+        liveEventStreams: [
+          socketClosedStream('socket closed 1'),
+          socketClosedStream('socket closed 2'),
+          const Stream<SessionEvent>.empty(),
+        ],
+        snapshot: const SessionSnapshot(
+          id: 'sess_1',
+          title: 'Repair me',
+          agentKind: 'codex',
+          sourceKind: 'managed',
+          runtimeSessionId: 'runtime_1',
+          workspacePath: '/tmp/workspace',
+          status: 'running',
+          hasMoreHistory: false,
+          events: [
+            SessionEvent(
+              id: 7,
+              eventType: 'assistant.message',
+              payload: {'text': 'repair snapshot'},
+            ),
+          ],
+        ),
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: ThemeData.dark(useMaterial3: true),
+          home: SessionDetailPage(
+            api: api,
+            daemonUrl: Uri.parse('https://daemon.example.com'),
+            currentUserId: 'usr_workspace',
+            session: const SessionSummary(
+              id: 'sess_1',
+              title: 'Repair me',
+              agentKind: 'codex',
+              sourceKind: 'managed',
+              runtimeSessionId: 'runtime_1',
+              status: 'running',
+              workspacePath: '/tmp/workspace',
+            ),
+            token: 'tok_workspace',
+            voice: const VoiceConfig(doubaoDirectAvailable: false),
+            initialSnapshot: SessionSnapshot(
+              id: 'sess_1',
+              title: 'Repair me',
+              agentKind: 'codex',
+              sourceKind: 'managed',
+              runtimeSessionId: 'runtime_1',
+              workspacePath: '/tmp/workspace',
+              status: 'running',
+              hasMoreHistory: false,
+              events: const [
+                SessionEvent(
+                  id: 5,
+                  eventType: 'assistant.message',
+                  payload: {'text': 'stale cached reply'},
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      expect(find.text('stale cached reply'), findsOneWidget);
+      expect(find.text('repair snapshot'), findsNothing);
+
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 2));
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 4));
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 4));
+      await tester.pumpAndSettle();
+
+      expect(api.eventSubscriptions.take(3), [
+        'sess_1:tok_workspace:5',
+        'sess_1:tok_workspace:5',
+        'sess_1:tok_workspace:5',
+      ]);
+      expect(api.eventSubscriptions.length, greaterThanOrEqualTo(4));
+      expect(api.eventSubscriptions[3], 'sess_1:tok_workspace:7');
+      expect(api.snapshotRequests, isNotEmpty);
+      expect(find.textContaining('repair snapshot'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'session resync event repairs the stream from a fresh snapshot',
+    (tester) async {
+      final api = FakeDaemonApi(
+        liveEventStreams: [
+          Stream<SessionEvent>.fromIterable(const [
+            SessionEvent(
+              id: 7,
+              eventType: 'session.resync.required',
+              payload: {
+                'reason': 'cursor_ahead',
+                'requestedAfter': 99,
+                'latestEventId': 7,
+              },
+            ),
+          ]),
+          const Stream<SessionEvent>.empty(),
+        ],
+        snapshot: const SessionSnapshot(
+          id: 'sess_1',
+          title: 'Repair me',
+          agentKind: 'codex',
+          sourceKind: 'managed',
+          runtimeSessionId: 'runtime_1',
+          workspacePath: '/tmp/workspace',
+          status: 'running',
+          hasMoreHistory: false,
+          events: [
+            SessionEvent(
+              id: 7,
+              eventType: 'assistant.message',
+              payload: {'text': 'repair snapshot'},
+            ),
+          ],
+        ),
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: ThemeData.dark(useMaterial3: true),
+          home: SessionDetailPage(
+            api: api,
+            daemonUrl: Uri.parse('https://daemon.example.com'),
+            currentUserId: 'usr_workspace',
+            session: const SessionSummary(
+              id: 'sess_1',
+              title: 'Repair me',
+              agentKind: 'codex',
+              sourceKind: 'managed',
+              runtimeSessionId: 'runtime_1',
+              status: 'running',
+              workspacePath: '/tmp/workspace',
+            ),
+            token: 'tok_workspace',
+            voice: const VoiceConfig(doubaoDirectAvailable: false),
+            initialSnapshot: const SessionSnapshot(
+              id: 'sess_1',
+              title: 'Repair me',
+              agentKind: 'codex',
+              sourceKind: 'managed',
+              runtimeSessionId: 'runtime_1',
+              workspacePath: '/tmp/workspace',
+              status: 'running',
+              hasMoreHistory: false,
+              events: [
+                SessionEvent(
+                  id: 5,
+                  eventType: 'assistant.message',
+                  payload: {'text': 'stale cached reply'},
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      expect(api.eventSubscriptions.first, 'sess_1:tok_workspace:5');
+
+      await tester.pumpAndSettle();
+
+      expect(api.snapshotRequests, isNotEmpty);
+      expect(api.snapshotRequests.first, 'sess_1:tok_workspace:null');
+      expect(find.textContaining('repair snapshot'), findsOneWidget);
+
+      expect(api.eventSubscriptions, ['sess_1:tok_workspace:5', 'sess_1:tok_workspace:7']);
+      expect(find.textContaining('repair snapshot'), findsOneWidget);
+    },
+  );
 
   testWidgets('reduced motion keeps the reconnecting banner static', (
     tester,
@@ -9310,7 +10314,10 @@ void main() {
                 workspacePath: '/home/jhz/projects/agent-dock',
               ),
             ],
-            voice: const VoiceConfig(doubaoDirectAvailable: true),
+            voice: VoiceConfig(
+              doubaoDirectAvailable: true,
+              providerCredentials: _providerVoiceCredentials,
+            ),
           ),
           snapshot: const SessionSnapshot(
             id: 'sess_1',
@@ -9662,7 +10669,10 @@ void main() {
                 workspacePath: '/home/jhz/projects/agent-dock',
               ),
             ],
-            voice: const VoiceConfig(doubaoDirectAvailable: true),
+            voice: VoiceConfig(
+              doubaoDirectAvailable: true,
+              providerCredentials: _providerVoiceCredentials,
+            ),
           ),
         ),
         voiceInputController: voice,
@@ -9715,7 +10725,10 @@ void main() {
                 workspacePath: '/home/jhz/projects/agent-dock',
               ),
             ],
-            voice: const VoiceConfig(doubaoDirectAvailable: true),
+            voice: VoiceConfig(
+              doubaoDirectAvailable: true,
+              providerCredentials: _providerVoiceCredentials,
+            ),
           ),
         ),
         voiceInputController: voice,
@@ -10554,7 +11567,10 @@ void main() {
                 workspacePath: '/home/jhz/projects/agent-dock',
               ),
             ],
-            voice: const VoiceConfig(doubaoDirectAvailable: true),
+            voice: VoiceConfig(
+              doubaoDirectAvailable: true,
+              providerCredentials: _providerVoiceCredentials,
+            ),
           ),
         ),
       );
@@ -10845,7 +11861,7 @@ void main() {
                 workspacePath: '/home/jhz/projects/agent-dock',
               ),
             ],
-            voice: const VoiceConfig(
+            voice: VoiceConfig(
               doubaoDirectAvailable: true,
               providerCredentials: DoubaoVoiceCredentials(
                 appId: 'app-provider',
@@ -10935,7 +11951,7 @@ void main() {
                 workspacePath: '/home/jhz/projects/agent-dock',
               ),
             ],
-            voice: const VoiceConfig(
+            voice: VoiceConfig(
               doubaoDirectAvailable: true,
               providerCredentials: DoubaoVoiceCredentials(
                 appId: 'app-provider',
@@ -12281,7 +13297,10 @@ void main() {
                 workspacePath: '/home/jhz/projects/agent-dock',
               ),
             ],
-            voice: VoiceConfig(doubaoDirectAvailable: true),
+            voice: VoiceConfig(
+              doubaoDirectAvailable: true,
+              providerCredentials: _providerVoiceCredentials,
+            ),
           ),
         ),
         voiceStorage: voiceStorage,
@@ -12354,7 +13373,10 @@ void main() {
                 workspacePath: '/home/jhz/projects/agent-dock',
               ),
             ],
-            voice: VoiceConfig(doubaoDirectAvailable: true),
+            voice: VoiceConfig(
+              doubaoDirectAvailable: true,
+              providerCredentials: _providerVoiceCredentials,
+            ),
           ),
         ),
         voiceStorage: voiceStorage,
@@ -12597,7 +13619,10 @@ void main() {
                 workspacePath: '/home/jhz/projects/agent-dock',
               ),
             ],
-            voice: VoiceConfig(doubaoDirectAvailable: true),
+            voice: VoiceConfig(
+              doubaoDirectAvailable: true,
+              providerCredentials: _providerVoiceCredentials,
+            ),
           ),
           refreshBootstrap: const MobileBootstrap(
             daemonVersion: '0.1.0',
@@ -13868,7 +14893,7 @@ void main() {
       'workspace:agent-dock:codex:Fresh mobile session',
     ]);
     expect(find.text('Fresh mobile session'), findsOneWidget);
-    expect(find.text('created'), findsOneWidget);
+    expect(find.widgetWithText(TextField, 'Message the agent'), findsOneWidget);
   });
 
   testWidgets('new session avoids spinner flicker for quick creation', (
@@ -14815,7 +15840,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Fresh mobile session'), findsOneWidget);
-    expect(find.text('created'), findsOneWidget);
+    expect(find.widgetWithText(TextField, 'Message the agent'), findsOneWidget);
   });
 
   testWidgets(
@@ -16128,7 +17153,9 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('Attach'));
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('attach-session-agent-codex')));
+      await tester.tap(
+        find.byKey(const ValueKey('attach-session-agent-codex')),
+      );
       await tester.pumpAndSettle();
       await tester.tap(find.text('Edit path'));
       await tester.pumpAndSettle();
@@ -16316,7 +17343,7 @@ void main() {
     },
   );
 
-  testWidgets('deletes a session from the sessions page', (tester) async {
+  testWidgets('does not show delete buttons on session cards', (tester) async {
     final api = FakeDaemonApi(
       bootstrap: const MobileBootstrap(
         daemonVersion: '0.1.0',
@@ -16348,57 +17375,19 @@ void main() {
     await tester.enterText(find.byType(TextField).at(1), '1234');
     await tester.tap(find.text('Sign in'));
     await tester.pumpAndSettle();
-    await tester.tap(find.byIcon(Icons.delete_outline_rounded));
-    await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(FilledButton, 'Delete session'));
-    await tester.pumpAndSettle();
 
-    expect(api.deletedSessions, ['sess_1']);
-    expect(find.text('Mobile migration'), findsNothing);
-    expect(find.text('No sessions yet'), findsOneWidget);
+    final sessionCard = find.byKey(
+      const ValueKey('session-row-inkwell-sess_1'),
+    );
+    expect(
+      find.descendant(
+        of: sessionCard,
+        matching: find.byIcon(Icons.delete_outline_rounded),
+      ),
+      findsNothing,
+    );
+    expect(api.deletedSessions, isEmpty);
   });
-
-  testWidgets(
-    'delete confirmation uses the visible derived session title when a session has no explicit title',
-    (tester) async {
-      final api = FakeDaemonApi(
-        bootstrap: const MobileBootstrap(
-          daemonVersion: '0.1.0',
-          user: CurrentUser(id: 'usr_workspace', displayName: 'Workspace'),
-          roots: [
-            WorkspaceRoot(
-              id: 'workspace',
-              label: 'Workspace',
-              path: '/home/jhz/projects',
-            ),
-          ],
-          sessions: [
-            SessionSummary(
-              id: 'sess_untitled',
-              title: null,
-              agentKind: 'codex',
-              sourceKind: 'managed',
-              runtimeSessionId: 'runtime_1',
-              status: 'running',
-              workspacePath: '/home/jhz/projects/agent-dock',
-            ),
-          ],
-          voice: VoiceConfig(doubaoDirectAvailable: false),
-        ),
-      );
-      await pumpApp(tester, api: api);
-
-      await tester.enterText(find.byType(TextField).at(0), 'workspace');
-      await tester.enterText(find.byType(TextField).at(1), '1234');
-      await tester.tap(find.text('Sign in'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.byIcon(Icons.delete_outline_rounded));
-      await tester.pumpAndSettle();
-
-      expect(find.text('Delete agent-dock?'), findsOneWidget);
-      expect(find.text('Delete /home/jhz/projects/agent-dock?'), findsNothing);
-    },
-  );
 
   testWidgets(
     'detail-page delete confirmation also uses the derived session title when a session has no explicit title',
@@ -16450,374 +17439,6 @@ void main() {
       expect(find.text('Delete /home/jhz/projects/agent-dock?'), findsNothing);
     },
   );
-
-  testWidgets(
-    'shows a deleting state on the session row while delete is in flight',
-    (tester) async {
-      final deleteCompleter = Completer<void>();
-      final api = FakeDaemonApi(
-        bootstrap: const MobileBootstrap(
-          daemonVersion: '0.1.0',
-          user: CurrentUser(id: 'usr_workspace', displayName: 'Workspace'),
-          roots: [
-            WorkspaceRoot(
-              id: 'workspace',
-              label: 'Workspace',
-              path: '/home/jhz/projects',
-            ),
-          ],
-          sessions: [
-            SessionSummary(
-              id: 'sess_1',
-              title: 'Mobile migration',
-              agentKind: 'codex',
-              sourceKind: 'managed',
-              runtimeSessionId: 'runtime_1',
-              status: 'running',
-              workspacePath: '/home/jhz/projects/agent-dock',
-            ),
-          ],
-          voice: VoiceConfig(doubaoDirectAvailable: false),
-        ),
-        deleteFuture: deleteCompleter.future,
-      );
-      await pumpApp(tester, api: api);
-
-      await tester.enterText(find.byType(TextField).at(0), 'workspace');
-      await tester.enterText(find.byType(TextField).at(1), '1234');
-      await tester.tap(find.text('Sign in'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.byIcon(Icons.delete_outline_rounded));
-      await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(FilledButton, 'Delete session'));
-      await tester.pump();
-
-      expect(find.text('Deleting...'), findsOneWidget);
-      final deletingButton = tester.widget<IconButton>(
-        find.byType(IconButton).first,
-      );
-      expect(deletingButton.onPressed, isNull);
-
-      deleteCompleter.complete();
-      await tester.pumpAndSettle();
-
-      expect(api.deletedSessions, ['sess_1']);
-      expect(find.text('Mobile migration'), findsNothing);
-    },
-  );
-
-  testWidgets('dims the session row while delete is in flight', (tester) async {
-    final deleteCompleter = Completer<void>();
-    final api = FakeDaemonApi(
-      bootstrap: const MobileBootstrap(
-        daemonVersion: '0.1.0',
-        user: CurrentUser(id: 'usr_workspace', displayName: 'Workspace'),
-        roots: [
-          WorkspaceRoot(
-            id: 'workspace',
-            label: 'Workspace',
-            path: '/home/jhz/projects',
-          ),
-        ],
-        sessions: [
-          SessionSummary(
-            id: 'sess_1',
-            title: 'Mobile migration',
-            agentKind: 'codex',
-            sourceKind: 'managed',
-            runtimeSessionId: 'runtime_1',
-            status: 'running',
-            workspacePath: '/home/jhz/projects/agent-dock',
-          ),
-        ],
-        voice: VoiceConfig(doubaoDirectAvailable: false),
-      ),
-      deleteFuture: deleteCompleter.future,
-    );
-    await pumpApp(tester, api: api);
-
-    await tester.enterText(find.byType(TextField).at(0), 'workspace');
-    await tester.enterText(find.byType(TextField).at(1), '1234');
-    await tester.tap(find.text('Sign in'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byIcon(Icons.delete_outline_rounded));
-    await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(FilledButton, 'Delete session'));
-    await tester.pump();
-
-    final opacity = tester.widget<AnimatedOpacity>(
-      find.byKey(const ValueKey('session-row-opacity-sess_1')),
-    );
-    expect(opacity.opacity, lessThan(1));
-
-    deleteCompleter.complete();
-    await tester.pumpAndSettle();
-  });
-
-  testWidgets(
-    'fades and collapses the session row before removing it after delete succeeds',
-    (tester) async {
-      final api = FakeDaemonApi(
-        bootstrap: const MobileBootstrap(
-          daemonVersion: '0.1.0',
-          user: CurrentUser(id: 'usr_workspace', displayName: 'Workspace'),
-          roots: [
-            WorkspaceRoot(
-              id: 'workspace',
-              label: 'Workspace',
-              path: '/home/jhz/projects',
-            ),
-          ],
-          sessions: [
-            SessionSummary(
-              id: 'sess_1',
-              title: 'Session to remove',
-              agentKind: 'codex',
-              sourceKind: 'managed',
-              runtimeSessionId: 'runtime_1',
-              status: 'idle',
-              workspacePath: '/home/jhz/projects/agent-dock',
-            ),
-          ],
-          voice: VoiceConfig(doubaoDirectAvailable: false),
-        ),
-      );
-      await pumpApp(tester, api: api);
-
-      await tester.enterText(find.byType(TextField).at(0), 'workspace');
-      await tester.enterText(find.byType(TextField).at(1), '1234');
-      await tester.tap(find.text('Sign in'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.byIcon(Icons.delete_outline_rounded));
-      await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(FilledButton, 'Delete session'));
-      await tester.pump();
-
-      expect(find.text('Session to remove'), findsOneWidget);
-      final opacity = tester.widget<AnimatedOpacity>(
-        find.byKey(const ValueKey('session-row-opacity-sess_1')),
-      );
-      expect(opacity.opacity, 0);
-      final collapse = tester.widget<AnimatedAlign>(
-        find.byKey(const ValueKey('session-row-collapse-sess_1')),
-      );
-      expect(collapse.heightFactor, 0);
-
-      await tester.pumpAndSettle();
-
-      expect(api.deletedSessions, ['sess_1']);
-      expect(find.text('Session to remove'), findsNothing);
-    },
-  );
-
-  testWidgets(
-    'keeps the session row and shows an error message when delete fails',
-    (tester) async {
-      final api = FakeDaemonApi(
-        bootstrap: const MobileBootstrap(
-          daemonVersion: '0.1.0',
-          user: CurrentUser(id: 'usr_workspace', displayName: 'Workspace'),
-          roots: [
-            WorkspaceRoot(
-              id: 'workspace',
-              label: 'Workspace',
-              path: '/home/jhz/projects',
-            ),
-          ],
-          sessions: [
-            SessionSummary(
-              id: 'sess_1',
-              title: 'Failed delete session',
-              agentKind: 'codex',
-              sourceKind: 'managed',
-              runtimeSessionId: 'runtime_1',
-              status: 'idle',
-              workspacePath: '/home/jhz/projects/agent-dock',
-            ),
-          ],
-          voice: VoiceConfig(doubaoDirectAvailable: false),
-        ),
-        deleteError: const DaemonApiException(
-          statusCode: 500,
-          code: 'DELETE_FAILED',
-          message: 'Could not delete session',
-        ),
-      );
-      await pumpApp(tester, api: api);
-
-      await tester.enterText(find.byType(TextField).at(0), 'workspace');
-      await tester.enterText(find.byType(TextField).at(1), '1234');
-      await tester.tap(find.text('Sign in'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.byIcon(Icons.delete_outline_rounded));
-      await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(FilledButton, 'Delete session'));
-      await tester.pumpAndSettle();
-
-      expect(find.text('Failed delete session'), findsOneWidget);
-      expect(
-        find.byKey(const ValueKey('sessions-status-banner')),
-        findsOneWidget,
-      );
-      expect(find.text('Could not delete session'), findsOneWidget);
-      expect(find.text('Deleting...'), findsNothing);
-    },
-  );
-
-  testWidgets(
-    'keeps the session row and shows a user-facing fallback when delete fails unexpectedly',
-    (tester) async {
-      final api = FakeDaemonApi(
-        bootstrap: const MobileBootstrap(
-          daemonVersion: '0.1.0',
-          user: CurrentUser(id: 'usr_workspace', displayName: 'Workspace'),
-          roots: [
-            WorkspaceRoot(
-              id: 'workspace',
-              label: 'Workspace',
-              path: '/home/jhz/projects',
-            ),
-          ],
-          sessions: [
-            SessionSummary(
-              id: 'sess_1',
-              title: 'Failed delete session',
-              agentKind: 'codex',
-              sourceKind: 'managed',
-              runtimeSessionId: 'runtime_1',
-              status: 'idle',
-              workspacePath: '/home/jhz/projects/agent-dock',
-            ),
-          ],
-          voice: VoiceConfig(doubaoDirectAvailable: false),
-        ),
-        deleteError: StateError('Delete flow corrupted'),
-      );
-      await pumpApp(tester, api: api);
-
-      await tester.enterText(find.byType(TextField).at(0), 'workspace');
-      await tester.enterText(find.byType(TextField).at(1), '1234');
-      await tester.tap(find.text('Sign in'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.byIcon(Icons.delete_outline_rounded));
-      await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(FilledButton, 'Delete session'));
-      await tester.pumpAndSettle();
-
-      expect(find.text('Failed delete session'), findsOneWidget);
-      expect(
-        find.byKey(const ValueKey('sessions-status-banner')),
-        findsOneWidget,
-      );
-      expect(find.text('Could not delete session'), findsOneWidget);
-      expect(find.text('Bad state: Delete flow corrupted'), findsNothing);
-      expect(find.text('Deleting...'), findsNothing);
-    },
-  );
-
-  testWidgets('routes back to login when deleting a session returns 401', (
-    tester,
-  ) async {
-    final storage = MemoryAuthStorage();
-    final api = FakeDaemonApi(
-      bootstrap: const MobileBootstrap(
-        daemonVersion: '0.1.0',
-        user: CurrentUser(id: 'usr_workspace', displayName: 'Workspace'),
-        roots: [
-          WorkspaceRoot(
-            id: 'workspace',
-            label: 'Workspace',
-            path: '/home/jhz/projects',
-          ),
-        ],
-        sessions: [
-          SessionSummary(
-            id: 'sess_1',
-            title: 'Expired delete session',
-            agentKind: 'codex',
-            sourceKind: 'managed',
-            runtimeSessionId: 'runtime_1',
-            status: 'idle',
-            workspacePath: '/home/jhz/projects/agent-dock',
-          ),
-        ],
-        voice: VoiceConfig(doubaoDirectAvailable: false),
-      ),
-      deleteError: const DaemonApiException(
-        statusCode: 401,
-        code: 'UNAUTHORIZED',
-        message: 'Unauthorized',
-      ),
-    );
-    await pumpApp(tester, api: api, storage: storage);
-
-    await tester.enterText(find.byType(TextField).at(0), 'workspace');
-    await tester.enterText(find.byType(TextField).at(1), '1234');
-    await tester.tap(find.text('Sign in'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byIcon(Icons.delete_outline_rounded));
-    await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(FilledButton, 'Delete session'));
-    await tester.pumpAndSettle();
-
-    expect(api.deletedSessions, ['sess_1']);
-    expect(storage.didClear, isTrue);
-    expect(storage.profile, isNull);
-    expect(find.text('Unlock workspace'), findsOneWidget);
-    expect(find.text('Expired delete session'), findsNothing);
-    expect(find.text('Session expired. Sign in again.'), findsOneWidget);
-    expect(find.text('Unauthorized'), findsNothing);
-  });
-
-  testWidgets('disables session row interactions while delete is in flight', (
-    tester,
-  ) async {
-    final deleteCompleter = Completer<void>();
-    final api = FakeDaemonApi(
-      bootstrap: const MobileBootstrap(
-        daemonVersion: '0.1.0',
-        user: CurrentUser(id: 'usr_workspace', displayName: 'Workspace'),
-        roots: [
-          WorkspaceRoot(
-            id: 'workspace',
-            label: 'Workspace',
-            path: '/home/jhz/projects',
-          ),
-        ],
-        sessions: [
-          SessionSummary(
-            id: 'sess_1',
-            title: 'Locked session',
-            agentKind: 'codex',
-            sourceKind: 'managed',
-            runtimeSessionId: 'runtime_1',
-            status: 'running',
-            workspacePath: '/home/jhz/projects/agent-dock',
-          ),
-        ],
-        voice: VoiceConfig(doubaoDirectAvailable: false),
-      ),
-    );
-    await pumpApp(tester, api: api);
-
-    await tester.enterText(find.byType(TextField).at(0), 'workspace');
-    await tester.enterText(find.byType(TextField).at(1), '1234');
-    await tester.tap(find.text('Sign in'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byIcon(Icons.delete_outline_rounded));
-    await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(FilledButton, 'Delete session'));
-    await tester.pump();
-
-    final rowInkWell = tester.widget<InkWell>(
-      find.byKey(const ValueKey('session-row-inkwell-sess_1')),
-    );
-    expect(rowInkWell.onTap, isNull);
-    expect(rowInkWell.onLongPress, isNull);
-
-    deleteCompleter.complete();
-    await tester.pumpAndSettle();
-  });
 
   testWidgets('long pressing a session opens the session actions sheet', (
     tester,
@@ -17756,6 +18377,7 @@ Future<void> pumpApp(
   MemoryVoiceCredentialsStorage? voiceStorage,
   SessionComposerDraftStore? composerDraftStore,
   SessionDetailCacheStore? sessionDetailCacheStore,
+  SessionOutboxStore? outboxStore,
   DoubaoSocketClient? doubaoSocketClient,
   DoubaoRecorder? doubaoRecorder,
   ImageAttachmentPicker? attachmentPicker,
@@ -17789,6 +18411,7 @@ Future<void> pumpApp(
       authStorage: resolvedStorage,
       composerDraftStore: composerDraftStore,
       sessionDetailCacheStore: sessionDetailCacheStore,
+      outboxStore: outboxStore,
       voiceCredentialsStorage: voiceStorage,
       doubaoSocketClient: doubaoSocketClient,
       doubaoRecorder: doubaoRecorder,
@@ -17859,6 +18482,8 @@ class FakeDaemonApi implements DaemonApi {
     this.snapshotError,
     SessionSnapshot? snapshot,
     SessionSnapshot? resumeResult,
+    this.resumeError,
+    this.resumeDelay,
     SessionSnapshot? olderSnapshot,
     this.olderSnapshotError,
     this.olderSnapshotDelay,
@@ -17980,6 +18605,8 @@ class FakeDaemonApi implements DaemonApi {
   final Object? snapshotError;
   final SessionSnapshot snapshotResult;
   final SessionSnapshot? resumeResult;
+  final Object? resumeError;
+  final Duration? resumeDelay;
   final SessionSnapshot? olderSnapshotResult;
   final Object? olderSnapshotError;
   final Duration? olderSnapshotDelay;
@@ -18108,6 +18735,12 @@ class FakeDaemonApi implements DaemonApi {
     required String token,
   }) async {
     resumedSessions.add('$sessionId:$token');
+    if (resumeDelay != null) {
+      await Future<void>.delayed(resumeDelay!);
+    }
+    if (resumeError != null) {
+      throw resumeError!;
+    }
     return resumeResult ?? snapshotResult;
   }
 
@@ -18125,9 +18758,10 @@ class FakeDaemonApi implements DaemonApi {
   }
 
   @override
-  Future<void> sendMessage({
+  Future<SendMessageAck> sendMessage({
     required String sessionId,
     required String token,
+    required String clientMessageId,
     required String message,
     List<String> imagePaths = const <String>[],
   }) async {
@@ -18139,6 +18773,12 @@ class FakeDaemonApi implements DaemonApi {
     if (sendMessageErrors.isNotEmpty) {
       throw sendMessageErrors.removeAt(0);
     }
+    return SendMessageAck(
+      accepted: true,
+      clientMessageId: clientMessageId,
+      eventId: 0,
+      sessionStatus: snapshotResult.status,
+    );
   }
 
   @override

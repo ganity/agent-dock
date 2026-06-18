@@ -344,6 +344,48 @@ describe("projectTimelineEvents", () => {
     ]);
   });
 
+  it("projects failed status messages when turn error details are missing", () => {
+    const events: SessionEvent[] = [
+      {
+        id: 1,
+        eventType: "session.status.changed",
+        payload: {
+          status: {
+            type: "failed",
+            message: "Error running remote compact task: unexpected status 502 Bad Gateway",
+          },
+        },
+      },
+    ];
+
+    expect(projectTimelineEvents(events)).toEqual([
+      {
+        id: "status:1",
+        kind: "status_summary",
+        statuses: ["Error running remote compact task: unexpected status 502 Bad Gateway"],
+      },
+    ]);
+  });
+
+  it("projects session.error events into visible timeline items", () => {
+    const events: SessionEvent[] = [
+      {
+        id: 1,
+        eventType: "session.error",
+        payload: { message: "temporary reconnect", willRetry: true },
+      },
+    ];
+
+    expect(projectTimelineEvents(events)).toEqual([
+      {
+        id: "error:1",
+        kind: "session_error",
+        message: "temporary reconnect",
+        willRetry: true,
+      },
+    ]);
+  });
+
   it("flushes activity summaries before later assistant messages", () => {
     const events: SessionEvent[] = [
       { id: 1, eventType: "user.message", payload: { text: "hello" } },

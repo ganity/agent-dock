@@ -50,9 +50,22 @@ pub struct CreateSessionRequest {
 
 #[derive(Deserialize)]
 pub struct SendMessageRequest {
+    #[serde(rename = "clientMessageId")]
+    pub client_message_id: Option<String>,
     pub message: String,
     #[serde(rename = "imagePaths", default)]
     pub image_paths: Vec<String>,
+}
+
+#[derive(Serialize)]
+pub struct SendMessageAckDto {
+    pub accepted: bool,
+    #[serde(rename = "clientMessageId")]
+    pub client_message_id: Option<String>,
+    #[serde(rename = "eventId")]
+    pub event_id: i64,
+    #[serde(rename = "sessionStatus")]
+    pub session_status: String,
 }
 
 #[derive(Deserialize)]
@@ -109,6 +122,12 @@ pub struct SessionSnapshotDto {
     #[serde(rename = "workspacePath")]
     pub workspace_path: String,
     pub status: String,
+    #[serde(rename = "runtimeHealth")]
+    pub runtime_health: String,
+    #[serde(rename = "runtimeErrorKind")]
+    pub runtime_error_kind: Option<String>,
+    #[serde(rename = "runtimeErrorMessage")]
+    pub runtime_error_message: Option<String>,
     #[serde(rename = "hasMoreHistory")]
     pub has_more_history: bool,
     pub events: Vec<SessionEventDto>,
@@ -127,6 +146,12 @@ pub struct SessionSummaryDto {
     pub status: String,
     #[serde(rename = "workspacePath")]
     pub workspace_path: String,
+    #[serde(rename = "runtimeHealth")]
+    pub runtime_health: String,
+    #[serde(rename = "runtimeErrorKind")]
+    pub runtime_error_kind: Option<String>,
+    #[serde(rename = "runtimeErrorMessage")]
+    pub runtime_error_message: Option<String>,
 }
 
 #[derive(Serialize)]

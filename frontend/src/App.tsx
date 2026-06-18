@@ -28,6 +28,31 @@ import { SessionListView } from "./components/SessionListView";
 import { getSessionTitle } from "./sessionDisplay";
 import type { AdminUser, CurrentUser, SessionDetail, SessionEvent, SessionSummary, WorkspaceRoot } from "./types";
 
+function shouldResumeCodexSessionBeforeOpen(session: SessionSummary | undefined): boolean {
+  if (!session || session.agentKind !== "codex") {
+    return false;
+  }
+
+  if (session.status === "suspended") {
+    return true;
+  }
+
+  switch (session.runtimeHealth) {
+    case "offline":
+      return true;
+    case "unknown":
+      return Boolean(session.runtimeSessionId);
+    case "recoverable_error":
+      return (
+        session.runtimeErrorKind === "stale_thread" ||
+        session.runtimeErrorKind === "runtime" ||
+        session.runtimeErrorKind == null
+      );
+    default:
+      return false;
+  }
+}
+
 export default function App() {
   const [authState, setAuthState] = useState<"checking" | "authenticated" | "anonymous">("checking");
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
@@ -85,27 +110,47 @@ export default function App() {
   useEffect(() => {
     if (!selectedSession) return;
 
-    const lastEventId = selectedSession.events.at(-1)?.id ?? 0;
-    const socket = connectSessionEvents(selectedSession.id, lastEventId);
-    socket.onmessage = (event) => {
-      const nextEvent = JSON.parse(event.data) as SessionEvent;
-      setSelectedSession((current) => {
-        if (!current || current.id !== selectedSession.id) return current;
-        if (current.events.some((item) => item.id === nextEvent.id)) return current;
-        const nextStatus =
-          nextEvent.eventType === "session.status.changed"
-            ? readSessionStatus(nextEvent.payload) ?? current.status
-            : current.status;
-        return {
-          ...current,
-          status: nextStatus,
-          events: [...current.events, nextEvent],
-        };
-      });
+    let disposed = false;
+    let socket: WebSocket | null = null;
+
+    const connect = (after: number) => {
+      socket?.close();
+      socket = connectSessionEvents(selectedSession.id, after);
+      socket.onmessage = (event) => {
+        const nextEvent = JSON.parse(event.data) as SessionEvent;
+        if (nextEvent.eventType === "session.resync.required") {
+          void (async () => {
+            const snapshot = await fetchSessionSnapshot(selectedSession.id, { limit: 50 });
+            if (disposed) return;
+            setSelectedSession((current) => (current?.id === selectedSession.id ? snapshot : current));
+            if (!disposed) {
+              connect(snapshot.events.at(-1)?.id ?? 0);
+            }
+          })();
+          return;
+        }
+
+        setSelectedSession((current) => {
+          if (!current || current.id !== selectedSession.id) return current;
+          if (current.events.some((item) => item.id === nextEvent.id)) return current;
+          const nextStatus =
+            nextEvent.eventType === "session.status.changed"
+              ? readSessionStatus(nextEvent.payload) ?? current.status
+              : current.status;
+          return {
+            ...current,
+            status: nextStatus,
+            events: [...current.events, nextEvent],
+          };
+        });
+      };
     };
 
+    connect(selectedSession.events.at(-1)?.id ?? 0);
+
     return () => {
-      socket.close();
+      disposed = true;
+      socket?.close();
     };
   }, [selectedSession]);
 
@@ -203,10 +248,10 @@ export default function App() {
               onSelect={(sessionId) => {
                 void (async () => {
                   const session = sessions.find((item) => item.id === sessionId);
-                  const detail =
-                    session?.status === "suspended"
-                      ? await resumeSession(sessionId)
-                      : await fetchSessionSnapshot(sessionId, { limit: 50 });
+                  const shouldResumeBeforeOpen = shouldResumeCodexSessionBeforeOpen(session);
+                  const detail = shouldResumeBeforeOpen
+                    ? await resumeSession(sessionId)
+                    : await fetchSessionSnapshot(sessionId, { limit: 50 });
                   setLoadingHistory(false);
                   setSelectedSession(detail);
                 })();

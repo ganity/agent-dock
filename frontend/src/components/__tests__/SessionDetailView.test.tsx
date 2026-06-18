@@ -408,6 +408,35 @@ describe("SessionDetailView", () => {
     expect(document.querySelector(".session-status-pill")).toHaveTextContent("idle");
   });
 
+  it("renders session.error events in the transcript without replacing a stable session status", () => {
+    render(
+      <SessionDetailView
+        session={{
+          id: "sess-error",
+          agentKind: "codex",
+          status: "running",
+          events: [
+            {
+              id: 1,
+              eventType: "session.error",
+              payload: { message: "temporary reconnect", willRetry: true },
+            },
+          ],
+        }}
+        onBack={() => {}}
+        onSend={() => {}}
+        onUploadImage={async () => ""}
+        onConnectVoiceInput={() => ({ close() {} } as WebSocket)}
+        onLoadOlder={async () => {}}
+        loadingHistory={false}
+      />,
+    );
+
+    expect(document.querySelector(".session-status-pill")).toHaveTextContent("running");
+    expect(screen.getByText("temporary reconnect")).toBeInTheDocument();
+    expect(screen.getByText("Retrying")).toBeInTheDocument();
+  });
+
   it("shows slash-command suggestions and inserts the selected command into the composer", () => {
     const onSend = vi.fn();
 

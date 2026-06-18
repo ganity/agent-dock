@@ -4,6 +4,7 @@ export type TimelineItem =
   | { id: string; kind: "user"; text: string; imagePaths: string[] }
   | { id: string; kind: "thinking"; text: string; collapsed: true }
   | { id: string; kind: "assistant"; text: string }
+  | { id: string; kind: "session_error"; message: string; willRetry: boolean }
   | { id: string; kind: "file_change"; files: string[]; summary: string; diffs?: string[]; status?: string }
   | {
       id: string;
@@ -109,6 +110,17 @@ export function projectTimelineEvents(events: SessionEvent[]): TimelineItem[] {
           text,
         });
       }
+      continue;
+    }
+
+    if (event.eventType === "session.error") {
+      flushPending();
+      items.push({
+        id: `error:${event.id}`,
+        kind: "session_error",
+        message: String(event.payload.message ?? ""),
+        willRetry: Boolean(event.payload.willRetry),
+      });
       continue;
     }
 
@@ -415,6 +427,12 @@ function readStatusFromPayload(payload: Record<string, unknown>): string {
   const errorMessage = readString(error.message)?.trim();
   if (errorMessage) {
     return errorMessage;
+  }
+
+  const status = asObject(payload.status);
+  const statusMessage = readString(status.message)?.trim();
+  if (statusMessage) {
+    return statusMessage;
   }
 
   return readStatus(payload.status);

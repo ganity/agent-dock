@@ -1,10 +1,10 @@
 use axum::{
+    Json, Router,
     body::Bytes,
     extract::{Path, Query, State},
-    http::{header, HeaderMap, StatusCode},
+    http::{HeaderMap, StatusCode, header},
     response::IntoResponse,
     routing::{get, post},
-    Json, Router,
 };
 use serde_json::json;
 use std::collections::HashMap;
@@ -12,10 +12,10 @@ use std::collections::HashMap;
 use crate::{
     app::AppState,
     http::dto::{
-        AdminUserDto, AttachSessionRequest, CreateSessionRequest, CreateUserRequest, CurrentUserDto,
-        LoginRequest, ResetUserPasswordRequest, SendMessageRequest, SessionEventDto,
-        ResumeCandidateDto, SessionSnapshotDto, SessionSummaryDto, WorkspaceDirectoryDto,
-        WorkspaceDirectoryListingDto, WorkspaceRootDto,
+        AdminUserDto, AttachSessionRequest, CreateSessionRequest, CreateUserRequest,
+        CurrentUserDto, LoginRequest, ResetUserPasswordRequest, ResumeCandidateDto,
+        SendMessageAckDto, SendMessageRequest, SessionEventDto, SessionSnapshotDto,
+        SessionSummaryDto, WorkspaceDirectoryDto, WorkspaceDirectoryListingDto, WorkspaceRootDto,
     },
     http::ws::{stream_session_events, stream_voice_input},
     workspace,
@@ -33,12 +33,24 @@ pub fn routes() -> Router<AppState> {
         .route("/api/workspaces/roots", get(workspace_roots))
         .route("/api/workspaces/directories", get(workspace_directories))
         .route("/api/sessions", post(create_session).get(list_sessions))
-        .route("/api/sessions/resume-candidates", get(list_resume_candidates))
+        .route(
+            "/api/sessions/resume-candidates",
+            get(list_resume_candidates),
+        )
         .route("/api/sessions/attach", post(attach_session))
-        .route("/api/sessions/{id}", get(get_session).delete(delete_session))
+        .route(
+            "/api/sessions/{id}",
+            get(get_session).delete(delete_session),
+        )
         .route("/api/sessions/{id}/resume", post(resume_session))
-        .route("/api/sessions/{id}/attachments/{name}", get(get_session_attachment))
-        .route("/api/sessions/{id}/attachments", post(upload_session_attachment))
+        .route(
+            "/api/sessions/{id}/attachments/{name}",
+            get(get_session_attachment),
+        )
+        .route(
+            "/api/sessions/{id}/attachments",
+            post(upload_session_attachment),
+        )
         .route("/api/sessions/{id}/messages", post(send_session_message))
         .route("/ws/sessions/{id}/events", get(stream_session_events))
         .route("/ws/voice-input", get(stream_voice_input))
@@ -117,29 +129,37 @@ async fn login(
             )
                 .into_response()
         }
-        None => {
-            (StatusCode::UNAUTHORIZED, Json(json!({ "error": "INVALID_CREDENTIALS" }))).into_response()
-        }
+        None => (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "INVALID_CREDENTIALS" })),
+        )
+            .into_response(),
     }
 }
 
-async fn auth_session(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> impl IntoResponse {
+async fn auth_session(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
     let Some(user) = current_user_from_headers(&state, &headers) else {
-        return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "UNAUTHORIZED" }))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "UNAUTHORIZED" })),
+        )
+            .into_response();
     };
 
-    (StatusCode::OK, Json(json!({ "ok": true, "user": current_user_to_dto(user) }))).into_response()
+    (
+        StatusCode::OK,
+        Json(json!({ "ok": true, "user": current_user_to_dto(user) })),
+    )
+        .into_response()
 }
 
-async fn mobile_bootstrap(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> impl IntoResponse {
+async fn mobile_bootstrap(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
     let Some(user) = current_user_from_headers(&state, &headers) else {
-        return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "UNAUTHORIZED" }))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "UNAUTHORIZED" })),
+        )
+            .into_response();
     };
 
     let roots = workspace_root_dtos(&state);
@@ -179,12 +199,13 @@ async fn mobile_bootstrap(
         .into_response()
 }
 
-async fn workspace_roots(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> impl IntoResponse {
+async fn workspace_roots(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
     if !is_authenticated(&state, &headers) {
-        return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "UNAUTHORIZED" }))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "UNAUTHORIZED" })),
+        )
+            .into_response();
     }
 
     let roots = workspace_root_dtos(&state);
@@ -192,12 +213,13 @@ async fn workspace_roots(
     (StatusCode::OK, Json(json!({ "roots": roots }))).into_response()
 }
 
-async fn list_users(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> impl IntoResponse {
+async fn list_users(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
     let Some(user) = current_user_from_headers(&state, &headers) else {
-        return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "UNAUTHORIZED" }))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "UNAUTHORIZED" })),
+        )
+            .into_response();
     };
     if !user.is_admin {
         return (StatusCode::FORBIDDEN, Json(json!({ "error": "FORBIDDEN" }))).into_response();
@@ -225,7 +247,11 @@ async fn create_user(
     Json(request): Json<CreateUserRequest>,
 ) -> impl IntoResponse {
     let Some(user) = current_user_from_headers(&state, &headers) else {
-        return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "UNAUTHORIZED" }))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "UNAUTHORIZED" })),
+        )
+            .into_response();
     };
     if !user.is_admin {
         return (StatusCode::FORBIDDEN, Json(json!({ "error": "FORBIDDEN" }))).into_response();
@@ -276,7 +302,11 @@ async fn reset_user_password(
     Json(request): Json<ResetUserPasswordRequest>,
 ) -> impl IntoResponse {
     let Some(user) = current_user_from_headers(&state, &headers) else {
-        return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "UNAUTHORIZED" }))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "UNAUTHORIZED" })),
+        )
+            .into_response();
     };
     if !user.is_admin {
         return (StatusCode::FORBIDDEN, Json(json!({ "error": "FORBIDDEN" }))).into_response();
@@ -290,7 +320,11 @@ async fn reset_user_password(
             .into_response();
     }
 
-    match state.auth.reset_password(&user_id, request.password.trim()).await {
+    match state
+        .auth
+        .reset_password(&user_id, request.password.trim())
+        .await
+    {
         Ok(true) => (StatusCode::OK, Json(json!({ "ok": true }))).into_response(),
         Ok(false) => (StatusCode::NOT_FOUND, Json(json!({ "error": "NOT_FOUND" }))).into_response(),
         Err(error) => (
@@ -307,7 +341,11 @@ async fn delete_user(
     Path(user_id): Path<String>,
 ) -> impl IntoResponse {
     let Some(user) = current_user_from_headers(&state, &headers) else {
-        return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "UNAUTHORIZED" }))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "UNAUTHORIZED" })),
+        )
+            .into_response();
     };
     if !user.is_admin {
         return (StatusCode::FORBIDDEN, Json(json!({ "error": "FORBIDDEN" }))).into_response();
@@ -337,7 +375,11 @@ async fn workspace_directories(
     Query(query): Query<HashMap<String, String>>,
 ) -> impl IntoResponse {
     if !is_authenticated(&state, &headers) {
-        return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "UNAUTHORIZED" }))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "UNAUTHORIZED" })),
+        )
+            .into_response();
     }
 
     let Some(path) = query.get("path").map(String::as_str) else {
@@ -381,7 +423,11 @@ async fn create_session(
     Json(request): Json<CreateSessionRequest>,
 ) -> impl IntoResponse {
     let Some(user) = current_user_from_headers(&state, &headers) else {
-        return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "UNAUTHORIZED" }))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "UNAUTHORIZED" })),
+        )
+            .into_response();
     };
 
     let title = request.title.and_then(|value| {
@@ -430,12 +476,13 @@ async fn create_session(
     (StatusCode::OK, Json(response)).into_response()
 }
 
-async fn list_sessions(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> impl IntoResponse {
+async fn list_sessions(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
     let Some(user) = current_user_from_headers(&state, &headers) else {
-        return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "UNAUTHORIZED" }))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "UNAUTHORIZED" })),
+        )
+            .into_response();
     };
 
     let sessions = match state.sessions.list_sessions_for_user(&user.id).await {
@@ -449,7 +496,10 @@ async fn list_sessions(
         }
     };
 
-    let response = sessions.into_iter().map(session_summary_to_dto).collect::<Vec<_>>();
+    let response = sessions
+        .into_iter()
+        .map(session_summary_to_dto)
+        .collect::<Vec<_>>();
 
     (StatusCode::OK, Json(json!({ "sessions": response }))).into_response()
 }
@@ -460,7 +510,11 @@ async fn list_resume_candidates(
     Query(query): Query<HashMap<String, String>>,
 ) -> impl IntoResponse {
     let Some(_user) = current_user_from_headers(&state, &headers) else {
-        return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "UNAUTHORIZED" }))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "UNAUTHORIZED" })),
+        )
+            .into_response();
     };
 
     let Some(root_id) = query.get("rootId").map(String::as_str) else {
@@ -530,7 +584,11 @@ async fn attach_session(
     Json(request): Json<AttachSessionRequest>,
 ) -> impl IntoResponse {
     let Some(user) = current_user_from_headers(&state, &headers) else {
-        return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "UNAUTHORIZED" }))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "UNAUTHORIZED" })),
+        )
+            .into_response();
     };
 
     let session_id = match state
@@ -575,20 +633,30 @@ async fn get_session(
     Query(query): Query<HashMap<String, String>>,
 ) -> impl IntoResponse {
     let Some(user) = current_user_from_headers(&state, &headers) else {
-        return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "UNAUTHORIZED" }))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "UNAUTHORIZED" })),
+        )
+            .into_response();
     };
 
     let limit = query
         .get("limit")
         .and_then(|value| value.parse::<usize>().ok())
         .filter(|value| *value > 0);
-    let before = query.get("before").and_then(|value| value.parse::<i64>().ok());
+    let before = query
+        .get("before")
+        .and_then(|value| value.parse::<i64>().ok());
 
     if let Err(response) = ensure_session_access(&state, &session_id, &user.id).await {
         return response;
     }
 
-    let snapshot = match state.sessions.load_snapshot_window(&session_id, limit, before).await {
+    let snapshot = match state
+        .sessions
+        .load_snapshot_window(&session_id, limit, before)
+        .await
+    {
         Ok(value) => value,
         Err(error) => {
             return (
@@ -608,7 +676,11 @@ async fn delete_session(
     Path(session_id): Path<String>,
 ) -> impl IntoResponse {
     let Some(user) = current_user_from_headers(&state, &headers) else {
-        return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "UNAUTHORIZED" }))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "UNAUTHORIZED" })),
+        )
+            .into_response();
     };
 
     if let Err(response) = ensure_session_access(&state, &session_id, &user.id).await {
@@ -632,7 +704,11 @@ async fn resume_session(
     Path(session_id): Path<String>,
 ) -> impl IntoResponse {
     let Some(user) = current_user_from_headers(&state, &headers) else {
-        return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "UNAUTHORIZED" }))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "UNAUTHORIZED" })),
+        )
+            .into_response();
     };
 
     if let Err(response) = ensure_session_access(&state, &session_id, &user.id).await {
@@ -656,19 +732,89 @@ async fn send_session_message(
     Json(request): Json<SendMessageRequest>,
 ) -> impl IntoResponse {
     let Some(user) = current_user_from_headers(&state, &headers) else {
-        return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "UNAUTHORIZED" }))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "UNAUTHORIZED" })),
+        )
+            .into_response();
     };
 
     if let Err(response) = ensure_session_access(&state, &session_id, &user.id).await {
         return response;
     }
 
+    if let Some(client_message_id) = request.client_message_id.as_deref() {
+        match state
+            .sessions
+            .message_receipt_event_id(&session_id, client_message_id)
+            .await
+        {
+            Ok(Some(event_id)) => {
+                let snapshot = match state.sessions.load_snapshot(&session_id).await {
+                    Ok(value) => value,
+                    Err(error) => {
+                        return (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(json!({ "error": error.to_string() })),
+                        )
+                            .into_response();
+                    }
+                };
+
+                return (
+                    StatusCode::OK,
+                    Json(SendMessageAckDto {
+                        accepted: true,
+                        client_message_id: request.client_message_id,
+                        event_id,
+                        session_status: snapshot.session.status,
+                    }),
+                )
+                    .into_response();
+            }
+            Ok(None) => {}
+            Err(error) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": error.to_string() })),
+                )
+                    .into_response();
+            }
+        }
+    }
+
     match state
         .sessions
-        .send_user_message_with_images(&session_id, request.message, request.image_paths)
+        .send_user_message_with_images(
+            &session_id,
+            request.client_message_id.as_deref(),
+            request.message,
+            request.image_paths,
+        )
         .await
     {
-        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))).into_response(),
+        Ok(user_message_event_id) => {
+            let snapshot = match state.sessions.load_snapshot(&session_id).await {
+                Ok(value) => value,
+                Err(error) => {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({ "error": error.to_string() })),
+                    )
+                        .into_response();
+                }
+            };
+            (
+                StatusCode::OK,
+                Json(SendMessageAckDto {
+                    accepted: true,
+                    client_message_id: request.client_message_id,
+                    event_id: user_message_event_id,
+                    session_status: snapshot.session.status,
+                }),
+            )
+                .into_response()
+        }
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": error.to_string() })),
@@ -685,7 +831,11 @@ async fn upload_session_attachment(
     body: Bytes,
 ) -> impl IntoResponse {
     let Some(user) = current_user_from_headers(&state, &headers) else {
-        return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "UNAUTHORIZED" }))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "UNAUTHORIZED" })),
+        )
+            .into_response();
     };
 
     if let Err(response) = ensure_session_access(&state, &session_id, &user.id).await {
@@ -708,7 +858,11 @@ async fn upload_session_attachment(
         .get("filename")
         .map(String::as_str)
         .unwrap_or("attachment.png");
-    let path = match state.sessions.store_image_attachment(&session_id, filename, &body).await {
+    let path = match state
+        .sessions
+        .store_image_attachment(&session_id, filename, &body)
+        .await
+    {
         Ok(path) => path,
         Err(error) => {
             return (
@@ -728,7 +882,11 @@ async fn get_session_attachment(
     Path((session_id, attachment_name)): Path<(String, String)>,
 ) -> impl IntoResponse {
     let Some(user) = current_user_from_headers(&state, &headers) else {
-        return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "UNAUTHORIZED" }))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "UNAUTHORIZED" })),
+        )
+            .into_response();
     };
 
     if let Err(response) = ensure_session_access(&state, &session_id, &user.id).await {
@@ -754,7 +912,10 @@ async fn get_session_attachment(
 
     (
         StatusCode::OK,
-        [(header::CONTENT_TYPE, content_type_for_attachment_name(&attachment_name))],
+        [(
+            header::CONTENT_TYPE,
+            content_type_for_attachment_name(&attachment_name),
+        )],
         bytes,
     )
         .into_response()
@@ -769,6 +930,9 @@ fn snapshot_to_dto(snapshot: crate::session::model::SessionSnapshot) -> SessionS
         runtime_session_id: snapshot.session.runtime_session_id,
         workspace_path: snapshot.session.workspace_path,
         status: snapshot.session.status,
+        runtime_health: snapshot.session.runtime_health,
+        runtime_error_kind: snapshot.session.runtime_error_kind,
+        runtime_error_message: snapshot.session.runtime_error_message,
         has_more_history: snapshot.has_more_history,
         events: snapshot
             .events
@@ -787,9 +951,15 @@ async fn ensure_session_access(
     session_id: &str,
     owner_user_id: &str,
 ) -> Result<(), axum::response::Response> {
-    match state.sessions.can_access_session(session_id, owner_user_id).await {
+    match state
+        .sessions
+        .can_access_session(session_id, owner_user_id)
+        .await
+    {
         Ok(true) => Ok(()),
-        Ok(false) => Err((StatusCode::FORBIDDEN, Json(json!({ "error": "FORBIDDEN" }))).into_response()),
+        Ok(false) => {
+            Err((StatusCode::FORBIDDEN, Json(json!({ "error": "FORBIDDEN" }))).into_response())
+        }
         Err(_) => Err(StatusCode::NOT_FOUND.into_response()),
     }
 }
@@ -837,6 +1007,9 @@ fn session_summary_to_dto(session: crate::session::model::SessionSummary) -> Ses
         runtime_session_id: session.runtime_session_id,
         status: session.status,
         workspace_path: session.workspace_path,
+        runtime_health: session.runtime_health,
+        runtime_error_kind: session.runtime_error_kind,
+        runtime_error_message: session.runtime_error_message,
     }
 }
 

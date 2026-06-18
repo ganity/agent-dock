@@ -9,6 +9,7 @@ import {
   AssistantCard,
   AttachedSessionCard,
   FileChangeCard,
+  SessionErrorCard,
   ThinkingCard,
   ToolCallCard,
   UserCard,
@@ -150,6 +151,15 @@ export function SessionDetailView(props: {
           }
           if (item.kind === "assistant") {
             return <AssistantCard key={item.id} text={item.text} />;
+          }
+          if (item.kind === "session_error") {
+            return (
+              <SessionErrorCard
+                key={item.id}
+                message={item.message}
+                willRetry={item.willRetry}
+              />
+            );
           }
           if (item.kind === "tool_call") {
             return (

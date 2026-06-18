@@ -1,20 +1,21 @@
 use std::{
     collections::HashMap,
     path::PathBuf,
+    process::ExitStatus,
     sync::{Arc, Mutex},
 };
 
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     process::Child,
-    sync::{mpsc, Mutex as TokioMutex},
+    sync::{Mutex as TokioMutex, mpsc},
 };
 
 use crate::{
     adapters::{
         claude::{parse_claude_result_session_id, parse_claude_stream_line},
         codex_protocol::{CodexSessionProtocol, UserMessage},
-        process::{claude_turn_launch, codex_managed_launch, spawn_command, LaunchCommand},
+        process::{LaunchCommand, claude_turn_launch, codex_managed_launch, spawn_command},
         resume::{list_claude_resume_candidates, list_codex_resume_candidates},
     },
     session::{
@@ -184,7 +185,9 @@ impl SessionService {
         limit: Option<usize>,
         before: Option<i64>,
     ) -> anyhow::Result<SessionSnapshot> {
-        self.store.load_snapshot_window(session_id, limit, before).await
+        self.store
+            .load_snapshot_window(session_id, limit, before)
+            .await
     }
 
     pub async fn list_sessions(&self) -> anyhow::Result<Vec<SessionSummary>> {
@@ -256,16 +259,51 @@ impl SessionService {
         Ok(deleted)
     }
 
-    pub async fn events_after(&self, session_id: &str, cursor: i64) -> anyhow::Result<Vec<StoredEvent>> {
+    pub async fn events_after(
+        &self,
+        session_id: &str,
+        cursor: i64,
+    ) -> anyhow::Result<Vec<StoredEvent>> {
         self.store.events_after(session_id, cursor).await
+    }
+
+    pub async fn latest_event_id(&self, session_id: &str) -> anyhow::Result<Option<i64>> {
+        self.store.latest_event_id(session_id).await
+    }
+
+    pub async fn message_receipt_event_id(
+        &self,
+        session_id: &str,
+        client_message_id: &str,
+    ) -> anyhow::Result<Option<i64>> {
+        self.store
+            .message_receipt_event_id(session_id, client_message_id)
+            .await
+    }
+
+    pub async fn record_message_receipt(
+        &self,
+        session_id: &str,
+        client_message_id: &str,
+        event_id: i64,
+    ) -> anyhow::Result<()> {
+        self.store
+            .record_message_receipt(session_id, client_message_id, event_id)
+            .await
     }
 
     pub async fn resume_session(&self, session_id: &str) -> anyhow::Result<SessionSnapshot> {
         let snapshot = self.store.load_snapshot(session_id).await?;
 
         if snapshot.session.agent_kind == "codex"
-            && self.runtime_inputs.lock().unwrap().get(session_id).is_none()
+            && self
+                .runtime_inputs
+                .lock()
+                .unwrap()
+                .get(session_id)
+                .is_none()
         {
+            self.store.reset_in_flight_user_messages(session_id).await?;
             let resume_thread_id = snapshot
                 .session
                 .runtime_session_id
@@ -274,7 +312,9 @@ impl SessionService {
 
             if let Some(thread_id) = resume_thread_id {
                 if snapshot.session.runtime_session_id.as_deref() != Some(thread_id.as_str()) {
-                    self.store.update_runtime_session_id(session_id, &thread_id).await?;
+                    self.store
+                        .update_runtime_session_id(session_id, &thread_id)
+                        .await?;
                 }
 
                 self.spawn_attached_codex_runtime(
@@ -289,7 +329,11 @@ impl SessionService {
             }
         }
 
-        self.store.load_snapshot(session_id).await
+        self.drain_codex_pending_messages(session_id).await?;
+
+        self.store
+            .load_snapshot_window(session_id, Some(50), None)
+            .await
     }
 
     pub async fn store_image_attachment(
@@ -327,26 +371,29 @@ impl SessionService {
         }
     }
 
-    pub async fn send_user_message(&self, session_id: &str, message: String) -> anyhow::Result<()> {
-        self.send_user_message_with_images(session_id, message, Vec::new()).await
+    pub async fn send_user_message(
+        &self,
+        session_id: &str,
+        message: String,
+    ) -> anyhow::Result<i64> {
+        self.send_user_message_with_images(session_id, None, message, Vec::new())
+            .await
     }
 
     pub async fn send_user_message_with_images(
         &self,
         session_id: &str,
+        client_message_id: Option<&str>,
         message: String,
         image_paths: Vec<String>,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<i64> {
         let snapshot = self.store.load_snapshot(session_id).await?;
-        self.store
-            .append_event(
-                session_id,
-                "user.message",
-                &serde_json::json!({ "text": message, "imagePaths": image_paths }).to_string(),
-            )
-            .await?;
 
         if snapshot.session.agent_kind == "claude" {
+            let event_id = self
+                .store
+                .append_user_message_event(session_id, client_message_id, &message, &image_paths)
+                .await?;
             let message = format_message_for_claude(message, &image_paths);
             self.spawn_claude_turn(
                 session_id,
@@ -354,61 +401,86 @@ impl SessionService {
                 snapshot.session.runtime_session_id.clone(),
             )
             .await?;
-            return Ok(());
+            return Ok(event_id);
         }
 
-        if snapshot.session.agent_kind == "codex"
-            && self.runtime_inputs.lock().unwrap().get(session_id).is_none()
-        {
-            let resume_thread_id = snapshot
-                .session
-                .runtime_session_id
-                .clone()
-                .or_else(|| find_latest_codex_thread_id(&snapshot.events));
-
-            if let Some(thread_id) = resume_thread_id {
-                if snapshot.session.runtime_session_id.as_deref() != Some(thread_id.as_str()) {
-                    self.store.update_runtime_session_id(session_id, &thread_id).await?;
-                }
-
-                self.spawn_attached_codex_runtime(
+        if snapshot.session.agent_kind == "codex" {
+            let (event_id, _) = self
+                .store
+                .append_user_message_and_enqueue_pending(
                     session_id,
-                    &snapshot.session.workspace_path,
-                    thread_id,
+                    client_message_id,
+                    message,
+                    &image_paths,
                 )
                 .await?;
-            } else if snapshot.session.source_kind == "managed" {
-                self.spawn_codex_runtime(session_id, &snapshot.session.workspace_path)
+
+            if self
+                .runtime_inputs
+                .lock()
+                .unwrap()
+                .get(session_id)
+                .is_none()
+            {
+                self.store.reset_in_flight_user_messages(session_id).await?;
+                let resume_thread_id = snapshot
+                    .session
+                    .runtime_session_id
+                    .clone()
+                    .or_else(|| find_latest_codex_thread_id(&snapshot.events));
+
+                if let Some(thread_id) = resume_thread_id {
+                    if snapshot.session.runtime_session_id.as_deref() != Some(thread_id.as_str()) {
+                        self.store
+                            .update_runtime_session_id(session_id, &thread_id)
+                            .await?;
+                    }
+
+                    self.spawn_attached_codex_runtime(
+                        session_id,
+                        &snapshot.session.workspace_path,
+                        thread_id,
+                    )
                     .await?;
+                } else if snapshot.session.source_kind == "managed" {
+                    self.spawn_codex_runtime(session_id, &snapshot.session.workspace_path)
+                        .await?;
+                }
             }
+
+            self.drain_codex_pending_messages(session_id).await?;
+            return Ok(event_id);
         }
 
+        let event_id = self
+            .store
+            .append_user_message_event(session_id, client_message_id, &message, &image_paths)
+            .await?;
+
+        let Some(sender) = self.runtime_inputs.lock().unwrap().get(session_id).cloned() else {
+            return Ok(event_id);
+        };
+
+        let payload = encode_runtime_input(&snapshot.session.agent_kind, &message);
+        sender
+            .send(payload)
+            .map_err(|_| anyhow::anyhow!("managed runtime input channel closed"))?;
+
+        Ok(event_id)
+    }
+
+    async fn drain_codex_pending_messages(&self, session_id: &str) -> anyhow::Result<()> {
         let Some(sender) = self.runtime_inputs.lock().unwrap().get(session_id).cloned() else {
             return Ok(());
         };
 
-        if snapshot.session.agent_kind == "codex" {
-            let outgoing = {
-                let mut protocols = self.codex_protocols.lock().unwrap();
-                let Some(protocol) = protocols.get_mut(session_id) else {
-                    return Ok(());
-                };
-                protocol.enqueue_user_message(UserMessage { text: message, image_paths })?
-            };
-
-            for request in outgoing {
-                sender
-                    .send(encode_json_line(request))
-                    .map_err(|_| anyhow::anyhow!("managed runtime input channel closed"))?;
-            }
-        } else {
-            let payload = encode_runtime_input(&snapshot.session.agent_kind, &message);
-            sender
-                .send(payload)
-                .map_err(|_| anyhow::anyhow!("managed runtime input channel closed"))?;
-        }
-
-        Ok(())
+        drain_one_codex_pending_message(
+            self.store.clone(),
+            self.codex_protocols.clone(),
+            session_id,
+            &sender,
+        )
+        .await
     }
 
     async fn spawn_claude_turn(
@@ -417,9 +489,15 @@ impl SessionService {
         message: String,
         runtime_session_id: Option<String>,
     ) -> anyhow::Result<()> {
-        self.store.update_session_status(session_id, "running").await?;
         self.store
-            .append_event(session_id, "session.status.changed", r#"{"status":"running"}"#)
+            .update_session_status(session_id, "running")
+            .await?;
+        self.store
+            .append_event(
+                session_id,
+                "session.status.changed",
+                r#"{"status":"running"}"#,
+            )
             .await?;
 
         let launch_command = claude_turn_launch(&message, runtime_session_id.as_deref());
@@ -455,7 +533,29 @@ impl SessionService {
                             .await;
                     }
                     Ok(None) => {}
-                    Err(_) => {}
+                    Err(error) => {
+                        let message = format!("Claude stream parse error: {error}");
+                        let _ = store
+                            .update_runtime_health(
+                                &session_id,
+                                "recoverable_error",
+                                Some("protocol"),
+                                Some(&message),
+                            )
+                            .await;
+                        let _ = store
+                            .append_event(
+                                &session_id,
+                                "session.error",
+                                &serde_json::json!({
+                                    "message": message,
+                                    "line": truncate_for_event(&line),
+                                    "willRetry": false
+                                })
+                                .to_string(),
+                            )
+                            .await;
+                    }
                 }
             }
 
@@ -466,7 +566,11 @@ impl SessionService {
             remove_runtime_child_if_current(&runtime_children, &session_id, &child_handle);
             let _ = store.update_session_status(&session_id, "suspended").await;
             let _ = store
-                .append_event(&session_id, "session.status.changed", r#"{"status":"suspended"}"#)
+                .append_event(
+                    &session_id,
+                    "session.status.changed",
+                    r#"{"status":"suspended"}"#,
+                )
                 .await;
         });
 
@@ -478,13 +582,20 @@ impl SessionService {
         session_id: &str,
         workspace_path: &str,
     ) -> anyhow::Result<()> {
-        self.store.update_session_status(session_id, "running").await?;
         self.store
-            .append_event(session_id, "session.status.changed", r#"{"status":"running"}"#)
+            .update_session_status(session_id, "running")
+            .await?;
+        self.store
+            .append_event(
+                session_id,
+                "session.status.changed",
+                r#"{"status":"running"}"#,
+            )
             .await?;
 
         let protocol = CodexSessionProtocol::new(workspace_path.to_string());
-        self.spawn_codex_runtime_with_protocol(session_id, protocol).await
+        self.spawn_codex_runtime_with_protocol(session_id, protocol)
+            .await
     }
 
     async fn spawn_attached_codex_runtime(
@@ -493,13 +604,21 @@ impl SessionService {
         workspace_path: &str,
         runtime_session_id: String,
     ) -> anyhow::Result<()> {
-        self.store.update_session_status(session_id, "running").await?;
         self.store
-            .append_event(session_id, "session.status.changed", r#"{"status":"running"}"#)
+            .update_session_status(session_id, "running")
+            .await?;
+        self.store
+            .append_event(
+                session_id,
+                "session.status.changed",
+                r#"{"status":"running"}"#,
+            )
             .await?;
 
-        let protocol = CodexSessionProtocol::new_attached(workspace_path.to_string(), runtime_session_id);
-        self.spawn_codex_runtime_with_protocol(session_id, protocol).await
+        let protocol =
+            CodexSessionProtocol::new_attached(workspace_path.to_string(), runtime_session_id);
+        self.spawn_codex_runtime_with_protocol(session_id, protocol)
+            .await
     }
 
     async fn spawn_codex_runtime_with_protocol(
@@ -571,6 +690,37 @@ impl SessionService {
 
                 match result {
                     Ok(result) => {
+                        if let Some(runtime_session_id) = result.runtime_session_id.as_deref() {
+                            let _ = store
+                                .update_runtime_session_id(&session_id, runtime_session_id)
+                                .await;
+                        }
+
+                        if let Some(session_status) = result.session_status.as_deref() {
+                            let _ = store
+                                .update_session_status(&session_id, session_status)
+                                .await;
+                        }
+
+                        if let Some(runtime_health) = result.runtime_health.as_deref() {
+                            let runtime_error_kind = result
+                                .runtime_error_kind
+                                .as_ref()
+                                .and_then(|kind| kind.as_deref());
+                            let runtime_error_message = result
+                                .runtime_error_message
+                                .as_ref()
+                                .and_then(|message| message.as_deref());
+                            let _ = store
+                                .update_runtime_health(
+                                    &session_id,
+                                    runtime_health,
+                                    runtime_error_kind,
+                                    runtime_error_message,
+                                )
+                                .await;
+                        }
+
                         for request in result.outgoing {
                             let _ = tx.send(encode_json_line(request));
                         }
@@ -579,23 +729,126 @@ impl SessionService {
                                 .append_event(&session_id, &event.event_type, &event.payload_json)
                                 .await;
                         }
+
+                        if result.completed_user_message {
+                            if let Ok(Some(message)) =
+                                store.in_flight_user_message(&session_id).await
+                            {
+                                let _ = store
+                                    .ack_in_flight_user_message(&session_id, message.id)
+                                    .await;
+                            }
+                        }
+
+                        if result.can_accept_user_message {
+                            let _ = drain_one_codex_pending_message(
+                                store.clone(),
+                                codex_protocols.clone(),
+                                &session_id,
+                                &tx,
+                            )
+                            .await;
+                        }
                     }
-                    Err(_) => {}
+                    Err(error) => {
+                        let message = format!("Codex protocol error: {error}");
+                        let _ = store
+                            .update_runtime_health(
+                                &session_id,
+                                "recoverable_error",
+                                Some("protocol"),
+                                Some(&message),
+                            )
+                            .await;
+                        let _ = store
+                            .append_event(
+                                &session_id,
+                                "session.error",
+                                &serde_json::json!({
+                                    "message": message,
+                                    "line": truncate_for_event(&line),
+                                    "willRetry": false
+                                })
+                                .to_string(),
+                            )
+                            .await;
+                    }
                 }
             }
 
+            runtime_inputs.lock().unwrap().remove(&session_id);
             drop(tx);
             let _ = writer.await;
             let mut child = child_handle.lock().await;
-            if let Some(mut child) = child.take() {
-                let _ = child.wait().await;
-            }
-            runtime_inputs.lock().unwrap().remove(&session_id);
+            let exit_status = if let Some(mut child) = child.take() {
+                child.wait().await.ok()
+            } else {
+                None
+            };
             codex_protocols.lock().unwrap().remove(&session_id);
             remove_runtime_child_if_current(&runtime_children, &session_id, &child_handle);
-            let _ = store.update_session_status(&session_id, "completed").await;
+
+            let in_flight_message = store
+                .in_flight_user_message(&session_id)
+                .await
+                .ok()
+                .flatten();
+            if in_flight_message.is_some() {
+                let _ = store.reset_in_flight_user_messages(&session_id).await;
+            }
+
+            let latest_status = store
+                .load_snapshot(&session_id)
+                .await
+                .ok()
+                .map(|snapshot| snapshot.session.status)
+                .unwrap_or_else(|| "running".to_string());
+            let shutdown_status = if latest_status == "failed" {
+                "failed"
+            } else {
+                "suspended"
+            };
+
+            if let Some(message) = in_flight_message {
+                let exit_summary = format_runtime_exit_summary(exit_status.as_ref());
+                let error_message = format!(
+                    "Codex runtime {exit_summary} before completing the current message; it will be retried."
+                );
+                let _ = store
+                    .update_runtime_health(
+                        &session_id,
+                        "recoverable_error",
+                        Some("runtime"),
+                        Some(&error_message),
+                    )
+                    .await;
+                let _ = store
+                    .append_event(
+                        &session_id,
+                        "session.error",
+                        &serde_json::json!({
+                            "message": error_message,
+                            "pendingMessageId": message.id,
+                            "pendingMessageText": message.text,
+                            "willRetry": true
+                        })
+                        .to_string(),
+                    )
+                    .await;
+            } else {
+                let _ = store
+                    .update_runtime_health(&session_id, "offline", None, None)
+                    .await;
+            }
             let _ = store
-                .append_event(&session_id, "session.status.changed", r#"{"status":"completed"}"#)
+                .update_session_status(&session_id, shutdown_status)
+                .await;
+            let _ = store
+                .append_event(
+                    &session_id,
+                    "session.status.changed",
+                    &serde_json::json!({ "status": shutdown_status }).to_string(),
+                )
                 .await;
         });
 
@@ -607,6 +860,23 @@ fn encode_runtime_input(agent_kind: &str, message: &str) -> String {
     match agent_kind {
         _ => format!("{message}\n"),
     }
+}
+
+fn format_runtime_exit_summary(exit_status: Option<&ExitStatus>) -> String {
+    match exit_status {
+        Some(status) if status.success() => "exited".to_string(),
+        Some(status) => format!("exited with status {status}"),
+        None => "exited unexpectedly".to_string(),
+    }
+}
+
+fn truncate_for_event(value: &str) -> String {
+    const MAX_CHARS: usize = 500;
+    let mut truncated = value.chars().take(MAX_CHARS).collect::<String>();
+    if value.chars().count() > MAX_CHARS {
+        truncated.push_str("...");
+    }
+    truncated
 }
 
 fn remove_runtime_child_if_current(
@@ -621,6 +891,59 @@ fn remove_runtime_child_if_current(
     {
         children.remove(session_id);
     }
+}
+
+async fn drain_one_codex_pending_message(
+    store: Arc<SqliteSessionStore>,
+    codex_protocols: Arc<Mutex<HashMap<String, CodexSessionProtocol>>>,
+    session_id: &str,
+    sender: &mpsc::UnboundedSender<String>,
+) -> anyhow::Result<()> {
+    if store.in_flight_user_message(session_id).await?.is_some() {
+        return Ok(());
+    }
+
+    let can_accept_user_message = {
+        let protocols = codex_protocols.lock().unwrap();
+        protocols
+            .get(session_id)
+            .is_some_and(CodexSessionProtocol::can_accept_user_message)
+    };
+    if !can_accept_user_message {
+        return Ok(());
+    }
+
+    let Some(pending_message) = store.claim_next_pending_user_message(session_id).await? else {
+        return Ok(());
+    };
+
+    let outgoing = {
+        let mut protocols = codex_protocols.lock().unwrap();
+        protocols.get_mut(session_id).and_then(|protocol| {
+            if !protocol.can_accept_user_message() {
+                return None;
+            }
+            protocol
+                .enqueue_user_message(UserMessage {
+                    text: pending_message.text,
+                    image_paths: pending_message.image_paths,
+                })
+                .ok()
+        })
+    };
+
+    let Some(outgoing) = outgoing else {
+        store.reset_in_flight_user_messages(session_id).await?;
+        return Ok(());
+    };
+
+    for request in outgoing {
+        sender
+            .send(encode_json_line(request))
+            .map_err(|_| anyhow::anyhow!("managed runtime input channel closed"))?;
+    }
+
+    Ok(())
 }
 
 fn format_message_for_claude(message: String, image_paths: &[String]) -> String {

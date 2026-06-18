@@ -12,6 +12,7 @@ import '../../shared/media/image_attachment_picker.dart';
 import '../../shared/media/share_attachments.dart';
 import '../../shared/storage/session_composer_draft_store.dart';
 import '../../shared/storage/session_detail_cache_store.dart';
+import '../../shared/storage/session_outbox_store.dart';
 import '../../shared/voice/voice_input_controller.dart';
 import 'timeline_projection.dart';
 
@@ -38,9 +39,11 @@ class SessionDetailPage extends StatefulWidget {
     this.token,
     this.session,
     this.initialSnapshot,
+    this.resumeInBackground = false,
     this.currentUserId,
     this.composerDraftStore,
     this.sessionDetailCacheStore,
+    this.outboxStore,
     this.onDeleteSession,
     this.onUnauthorized,
   });
@@ -56,9 +59,11 @@ class SessionDetailPage extends StatefulWidget {
   final String? token;
   final SessionSummary? session;
   final SessionSnapshot? initialSnapshot;
+  final bool resumeInBackground;
   final String? currentUserId;
   final SessionComposerDraftStore? composerDraftStore;
   final SessionDetailCacheStore? sessionDetailCacheStore;
+  final SessionOutboxStore? outboxStore;
   final Future<bool> Function(SessionSummary session)? onDeleteSession;
   final Future<void> Function()? onUnauthorized;
 
@@ -71,6 +76,8 @@ class _SessionDetailPageState extends State<SessionDetailPage>
   static const _slashCommands = <String>['/resume', '/model', '\$skills'];
   static const _bottomProximityThreshold = 120.0;
   static const _topHistoryLoadThreshold = 400.0;
+  static const _eventStreamHeartbeatTimeout = Duration(seconds: 60);
+  static const _eventStreamHeartbeatProbe = Duration(seconds: 15);
   static const _attachmentUploadSuccessStateDuration = Duration(
     milliseconds: 600,
   );
@@ -89,6 +96,8 @@ class _SessionDetailPageState extends State<SessionDetailPage>
   StreamSubscription<SessionEvent>? _eventSubscription;
   final List<_UploadedAttachment> _attachments = <_UploadedAttachment>[];
   final Map<int, Timer> _attachmentSuccessTimers = <int, Timer>{};
+  final Map<String, SessionOutboxEntry> _pendingOutboxEntries =
+      <String, SessionOutboxEntry>{};
   final Set<int> _removingAttachmentIds = <int>{};
   var _nextAttachmentId = 0;
   final Set<String> _expandedTimelineItemKeys = <String>{};
@@ -109,9 +118,16 @@ class _SessionDetailPageState extends State<SessionDetailPage>
   bool _isListeningForVoice = false;
   bool _isHandlingUnauthorized = false;
   bool _hasStartedEventStream = false;
+  bool _hasStartedBackgroundResume = false;
+  bool _hasStartedSnapshotRefresh = false;
+  bool _isRepairingEventStreamState = false;
+  bool _openedFromCachedSession = false;
+  bool _mustWaitForInitialSnapshotBeforeStreaming = false;
+  bool _isAppInForeground = true;
   bool _hasAutoScrolledToLatest = false;
   bool _isForbiddenSnapshot = false;
   int _pendingNewEventCount = 0;
+  int _nextClientMessageCounter = 0;
   bool _hasPendingAssistantStreamUpdate = false;
   int _streamBannerCollapseCount = 0;
   int _sendFailureShakeCount = 0;
@@ -124,8 +140,11 @@ class _SessionDetailPageState extends State<SessionDetailPage>
   _ComposerVoiceStatusIndicatorState _cancelFadingVoiceStatusIndicatorState =
       _ComposerVoiceStatusIndicatorState.none;
   Timer? _eventStreamRetryTimer;
+  Timer? _eventStreamHeartbeatTimer;
   Timer? _composerClearTimer;
   Timer? _voiceCancelFadeTimer;
+  Duration _eventStreamIdleFor = Duration.zero;
+  bool _eventStreamSawErrorThisConnection = false;
 
   Future<void> _emitSendStartedHaptic() async {
     await HapticFeedback.lightImpact();
@@ -172,6 +191,218 @@ class _SessionDetailPageState extends State<SessionDetailPage>
       userId: userId,
       sessionId: session.id,
     );
+  }
+
+  SessionOutboxScope? get _outboxScope {
+    final daemonUrl = widget.daemonUrl;
+    final userId = widget.currentUserId;
+    final session = widget.session;
+    if (daemonUrl == null || userId == null || session == null) {
+      return null;
+    }
+    return SessionOutboxScope(
+      daemonUrl: daemonUrl,
+      userId: userId,
+      sessionId: session.id,
+    );
+  }
+
+  List<SessionEvent> _eventsWithPendingOutbox() {
+    final baseEvents = List<SessionEvent>.from(
+      _events ?? const <SessionEvent>[],
+    );
+    if (_pendingOutboxEntries.isEmpty) {
+      return baseEvents;
+    }
+    final lastEventId = baseEvents.isEmpty ? 0 : baseEvents.last.id;
+    final pendingEntries = _pendingOutboxEntries.values.toList()
+      ..sort(
+        (left, right) => left.createdAtMillis.compareTo(right.createdAtMillis),
+      );
+    final pendingEvents = <SessionEvent>[
+      for (var index = 0; index < pendingEntries.length; index++)
+        SessionEvent(
+          id: lastEventId + index + 1,
+          eventType: 'user.message',
+          payload: {
+            'text': pendingEntries[index].text,
+            'imagePaths': pendingEntries[index].imagePaths,
+          },
+        ),
+    ];
+    return <SessionEvent>[...baseEvents, ...pendingEvents];
+  }
+
+  void _restoreOutboxEntries() {
+    final outboxScope = _outboxScope;
+    final outboxStore = widget.outboxStore;
+    if (outboxScope == null || outboxStore == null) {
+      return;
+    }
+    final entries = outboxStore.listEntries(scope: outboxScope);
+    _pendingOutboxEntries
+      ..clear()
+      ..addEntries(
+        entries.map((entry) => MapEntry(entry.clientMessageId, entry)),
+      );
+  }
+
+  void _saveOutboxEntry(SessionOutboxEntry entry) {
+    final outboxScope = _outboxScope;
+    final outboxStore = widget.outboxStore;
+    if (outboxScope == null || outboxStore == null) {
+      return;
+    }
+    outboxStore.saveEntry(scope: outboxScope, entry: entry);
+    _pendingOutboxEntries[entry.clientMessageId] = entry;
+  }
+
+  void _removeOutboxEntry(String clientMessageId) {
+    final outboxScope = _outboxScope;
+    final outboxStore = widget.outboxStore;
+    if (outboxScope != null && outboxStore != null) {
+      outboxStore.removeEntry(
+        scope: outboxScope,
+        clientMessageId: clientMessageId,
+      );
+    }
+    _pendingOutboxEntries.remove(clientMessageId);
+  }
+
+  void _reconcileOutboxAgainstEvents(Iterable<SessionEvent> events) {
+    for (final event in events) {
+      if (event.eventType != 'user.message') {
+        continue;
+      }
+      final clientMessageId = event.payload['clientMessageId'];
+      if (clientMessageId is String && clientMessageId.isNotEmpty) {
+        _removeOutboxEntry(clientMessageId);
+      }
+    }
+  }
+
+  String _nextClientMessageId() {
+    _nextClientMessageCounter += 1;
+    return 'cli_${DateTime.now().microsecondsSinceEpoch}_$_nextClientMessageCounter';
+  }
+
+  SessionOutboxEntry? get _retryableOutboxEntry {
+    final entries = _pendingOutboxEntries.values.where(
+      (entry) => entry.status == SessionOutboxStatus.failedRetryable,
+    );
+    if (entries.isEmpty) {
+      return null;
+    }
+    final sorted = entries.toList()
+      ..sort(
+        (left, right) => left.createdAtMillis.compareTo(right.createdAtMillis),
+      );
+    return sorted.first;
+  }
+
+  Future<void> _retryFailedSend() async {
+    final retryEntry = _retryableOutboxEntry;
+    if (retryEntry == null) {
+      await _sendMessage();
+      return;
+    }
+    await _sendOutboxEntry(retryEntry, clearComposerOnSuccess: true);
+  }
+
+  Future<void> _sendOutboxEntry(
+    SessionOutboxEntry entry, {
+    required bool clearComposerOnSuccess,
+  }) async {
+    final api = widget.api;
+    final token = widget.token;
+    final session = widget.session;
+    if (api == null || token == null || session == null) {
+      return;
+    }
+
+    final sendingEntry = entry.copyWith(status: SessionOutboxStatus.retrying);
+    setState(() {
+      _isSending = true;
+      _sendFailureText = null;
+      _pendingOutboxEntries[entry.clientMessageId] = sendingEntry;
+    });
+    _saveOutboxEntry(sendingEntry);
+    unawaited(_emitSendStartedHaptic());
+
+    try {
+      await api.sendMessage(
+        sessionId: session.id,
+        token: token,
+        clientMessageId: entry.clientMessageId,
+        message: entry.text,
+        imagePaths: entry.imagePaths,
+      );
+      if (!mounted) {
+        return;
+      }
+      _removeOutboxEntry(entry.clientMessageId);
+      _composerClearTimer?.cancel();
+      if (clearComposerOnSuccess) {
+        if (MediaQuery.disableAnimationsOf(context)) {
+          setState(() {
+            _messageController.clear();
+          });
+        } else {
+          setState(() {
+            _composerClearFadeCount += 1;
+          });
+          _composerClearTimer = Timer(const Duration(milliseconds: 160), () {
+            if (!mounted) {
+              return;
+            }
+            setState(() {
+              _composerClearFadeCount = 0;
+              _messageController.clear();
+            });
+          });
+        }
+        final draftScope = _draftScope;
+        final composerDraftStore = widget.composerDraftStore;
+        if (draftScope != null && composerDraftStore != null) {
+          composerDraftStore.clearDraft(scope: draftScope);
+        }
+        _attachments.removeWhere(
+          (attachment) => entry.imagePaths.contains(attachment.path),
+        );
+      }
+      _attachmentError = null;
+      _sendFailureText = null;
+      unawaited(_emitSuccessHaptic());
+    } on Object catch (error) {
+      if (await _handleUnauthorizedRequest(error)) {
+        return;
+      }
+      _logRequestFailure('sendMessage', error);
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _pendingOutboxEntries[entry.clientMessageId] = entry.copyWith(
+          status: SessionOutboxStatus.failedRetryable,
+        );
+        _sendFailureText = _requestFailureText(
+          error,
+          fallback: 'Send failed. Retry.',
+        );
+        _sendFailureShakeCount += 1;
+      });
+      final failedEntry = _pendingOutboxEntries[entry.clientMessageId];
+      if (failedEntry != null) {
+        _saveOutboxEntry(failedEntry);
+      }
+      unawaited(_emitWarningHaptic());
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSending = false;
+        });
+      }
+    }
   }
 
   void _toggleTimelineItemExpanded(String key) {
@@ -331,6 +562,10 @@ class _SessionDetailPageState extends State<SessionDetailPage>
     final cachedSession = detailCacheStore != null && detailCacheScope != null
         ? detailCacheStore.readCache(scope: detailCacheScope)
         : null;
+    _restoreOutboxEntries();
+    _openedFromCachedSession = cachedSession != null;
+    _mustWaitForInitialSnapshotBeforeStreaming =
+        initialSnapshot == null && cachedSession == null;
     if (initialSnapshot != null) {
       _events = List<SessionEvent>.from(initialSnapshot.events);
       _hasMoreHistory = initialSnapshot.hasMoreHistory;
@@ -349,6 +584,8 @@ class _SessionDetailPageState extends State<SessionDetailPage>
         agentKind: session.agentKind,
         sourceKind: session.sourceKind,
         runtimeSessionId: session.runtimeSessionId,
+        runtimeHealth: session.runtimeHealth,
+        runtimeErrorMessage: session.runtimeErrorMessage,
         workspacePath: session.workspacePath,
         status: session.status,
         hasMoreHistory: cachedSession.hasMoreHistory,
@@ -369,12 +606,11 @@ class _SessionDetailPageState extends State<SessionDetailPage>
             if (!mounted) {
               return snapshot;
             }
-            setState(() {
-              _resolvedSessionSummary = snapshot.toSummary();
-            });
+            _mergeSnapshot(snapshot);
             return snapshot;
           });
     }
+    _ensureConcurrentOpenWork();
   }
 
   @override
@@ -390,6 +626,7 @@ class _SessionDetailPageState extends State<SessionDetailPage>
     _composerClearTimer?.cancel();
     _voiceCancelFadeTimer?.cancel();
     _eventStreamRetryTimer?.cancel();
+    _eventStreamHeartbeatTimer?.cancel();
     _eventSubscription?.cancel();
     _timelineScrollController.removeListener(_handleTimelineScrollChanged);
     _timelineScrollController.removeListener(
@@ -403,7 +640,33 @@ class _SessionDetailPageState extends State<SessionDetailPage>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state != AppLifecycleState.resumed || !_hasStartedEventStream) {
+    final isForeground = switch (state) {
+      AppLifecycleState.resumed => true,
+      AppLifecycleState.inactive ||
+      AppLifecycleState.hidden ||
+      AppLifecycleState.paused ||
+      AppLifecycleState.detached => false,
+    };
+    if (_isAppInForeground == isForeground) {
+      return;
+    }
+    _isAppInForeground = isForeground;
+    if (!_hasStartedEventStream) {
+      return;
+    }
+    if (!isForeground) {
+      _eventStreamRetryTimer?.cancel();
+      _eventStreamRetryTimer = null;
+      _eventStreamHeartbeatTimer?.cancel();
+      _eventStreamHeartbeatTimer = null;
+      unawaited(_eventSubscription?.cancel());
+      _eventSubscription = null;
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _isEventStreamConnected = false;
+      });
       return;
     }
     _eventStreamRetryTimer?.cancel();
@@ -559,7 +822,7 @@ class _SessionDetailPageState extends State<SessionDetailPage>
       );
       if (attempt >= 3) {
         _hasAutoScrolledToLatest = true;
-        _maybeLoadOlderEventsFromController();
+        _maybeLoadOlderEventsFromController(allowNonScrollableOnly: true);
         return;
       }
       _scheduleInitialScrollToLatest(attempt: attempt + 1);
@@ -617,7 +880,9 @@ class _SessionDetailPageState extends State<SessionDetailPage>
           );
   }
 
-  void _maybeLoadOlderEventsFromController() {
+  void _maybeLoadOlderEventsFromController({
+    bool allowNonScrollableOnly = false,
+  }) {
     if (!_timelineScrollController.hasClients || !_hasMoreHistory) {
       return;
     }
@@ -627,12 +892,20 @@ class _SessionDetailPageState extends State<SessionDetailPage>
           !_hasMoreHistory) {
         return;
       }
+      if (allowNonScrollableOnly &&
+          _timelineScrollController.position.maxScrollExtent > 0) {
+        return;
+      }
       _maybeLoadOlderEventsOnScroll(_timelineScrollController.position.pixels);
     });
   }
 
-  void _maybeLoadOlderEventsOnScroll(double pixelsFromTop) {
-    if (!_hasAutoScrolledToLatest || !_timelineScrollController.hasClients) {
+  void _maybeLoadOlderEventsOnScroll(
+    double pixelsFromTop, {
+    bool allowBeforeAutoScroll = false,
+  }) {
+    if ((!_hasAutoScrolledToLatest && !allowBeforeAutoScroll) ||
+        !_timelineScrollController.hasClients) {
       return;
     }
     if (pixelsFromTop <= _topHistoryLoadThreshold) {
@@ -890,87 +1163,25 @@ class _SessionDetailPageState extends State<SessionDetailPage>
   }
 
   Future<void> _sendMessage() async {
-    final api = widget.api;
-    final token = widget.token;
-    final session = widget.session;
     final message = _messageController.text.trim();
     final uploadedAttachmentPaths = _attachments
         .where((attachment) => attachment.isUploaded)
         .map((attachment) => attachment.path!)
         .toList();
-    if (api == null ||
-        token == null ||
-        session == null ||
-        (message.isEmpty && uploadedAttachmentPaths.isEmpty)) {
+    if (message.isEmpty && uploadedAttachmentPaths.isEmpty) {
       return;
     }
-
-    setState(() {
-      _isSending = true;
-      _sendFailureText = null;
-    });
-    unawaited(_emitSendStartedHaptic());
-    try {
-      await api.sendMessage(
-        sessionId: session.id,
-        token: token,
-        message: message,
+    final clientMessageId = _nextClientMessageId();
+    await _sendOutboxEntry(
+      SessionOutboxEntry(
+        clientMessageId: clientMessageId,
+        text: message,
         imagePaths: uploadedAttachmentPaths,
-      );
-      if (!mounted) {
-        return;
-      }
-      _composerClearTimer?.cancel();
-      if (MediaQuery.disableAnimationsOf(context)) {
-        setState(() {
-          _messageController.clear();
-        });
-      } else {
-        setState(() {
-          _composerClearFadeCount += 1;
-        });
-        _composerClearTimer = Timer(const Duration(milliseconds: 160), () {
-          if (!mounted) {
-            return;
-          }
-          setState(() {
-            _composerClearFadeCount = 0;
-            _messageController.clear();
-          });
-        });
-      }
-      final draftScope = _draftScope;
-      final composerDraftStore = widget.composerDraftStore;
-      if (draftScope != null && composerDraftStore != null) {
-        composerDraftStore.clearDraft(scope: draftScope);
-      }
-      _attachments.removeWhere((attachment) => attachment.isUploaded);
-      _attachmentError = null;
-      _sendFailureText = null;
-      unawaited(_emitSuccessHaptic());
-    } on Object catch (error) {
-      if (await _handleUnauthorizedRequest(error)) {
-        return;
-      }
-      _logRequestFailure('sendMessage', error);
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _sendFailureText = _requestFailureText(
-          error,
-          fallback: 'Send failed. Retry.',
-        );
-        _sendFailureShakeCount += 1;
-      });
-      unawaited(_emitWarningHaptic());
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isSending = false;
-        });
-      }
-    }
+        createdAtMillis: DateTime.now().millisecondsSinceEpoch,
+        status: SessionOutboxStatus.sending,
+      ),
+      clearComposerOnSuccess: true,
+    );
   }
 
   Future<void> _startVoiceInput() async {
@@ -1202,6 +1413,8 @@ class _SessionDetailPageState extends State<SessionDetailPage>
   void _connectEventStream() {
     _eventStreamRetryTimer?.cancel();
     _eventStreamRetryTimer = null;
+    _eventStreamHeartbeatTimer?.cancel();
+    _eventStreamHeartbeatTimer = null;
     _connectEventStreamWithStateUpdate(
       updateState: true,
       preserveReconnectBanner: true,
@@ -1216,6 +1429,19 @@ class _SessionDetailPageState extends State<SessionDetailPage>
     _eventStreamRetryTimer = Timer(retryDelay, () {
       _eventStreamRetryTimer = null;
       if (!mounted || _isHandlingUnauthorized) {
+        return;
+      }
+      if (_eventStreamFailureCount >= 3) {
+        unawaited(() async {
+          await _repairSessionStateFromSnapshot();
+          if (!mounted || _isHandlingUnauthorized || !_isAppInForeground) {
+            return;
+          }
+          _connectEventStreamWithStateUpdate(
+            updateState: true,
+            preserveReconnectBanner: true,
+          );
+        }());
         return;
       }
       _connectEventStreamWithStateUpdate(
@@ -1245,6 +1471,8 @@ class _SessionDetailPageState extends State<SessionDetailPage>
     _isHandlingUnauthorized = true;
     unawaited(_eventSubscription?.cancel());
     _eventSubscription = null;
+    _eventStreamHeartbeatTimer?.cancel();
+    _eventStreamHeartbeatTimer = null;
     unawaited(widget.voiceInputController?.cancel());
     await onUnauthorized();
     if (!mounted) {
@@ -1261,6 +1489,253 @@ class _SessionDetailPageState extends State<SessionDetailPage>
     return true;
   }
 
+  void _ensureConcurrentOpenWork() {
+    final session = widget.session;
+    if (!_hasStartedEventStream &&
+        session != null &&
+        !_mustWaitForInitialSnapshotBeforeStreaming) {
+      _startEventStream(
+        _cachedSnapshot ??
+            widget.initialSnapshot ??
+            SessionSnapshot(
+              id: session.id,
+              title: session.title,
+              agentKind: session.agentKind,
+              sourceKind: session.sourceKind,
+              runtimeSessionId: session.runtimeSessionId,
+              runtimeHealth: session.runtimeHealth,
+              runtimeErrorMessage: session.runtimeErrorMessage,
+              workspacePath: session.workspacePath,
+              status: session.status,
+              hasMoreHistory: _hasMoreHistory,
+              events: _events ?? const <SessionEvent>[],
+            ),
+      );
+    }
+
+    if (widget.resumeInBackground && !_hasStartedBackgroundResume) {
+      _hasStartedBackgroundResume = true;
+      unawaited(_resumeSessionInBackground());
+    }
+
+    if (!_hasStartedSnapshotRefresh &&
+        widget.api != null &&
+        widget.token != null &&
+        widget.session != null &&
+        widget.initialSnapshot == null &&
+        _openedFromCachedSession) {
+      _hasStartedSnapshotRefresh = true;
+      unawaited(_refreshSnapshotInBackground());
+    }
+  }
+
+  Future<void> _resumeSessionInBackground() async {
+    final api = widget.api;
+    final token = widget.token;
+    final session = widget.session;
+    if (api == null || token == null || session == null) {
+      return;
+    }
+    try {
+      final snapshot = await api.resumeSession(
+        sessionId: session.id,
+        token: token,
+      );
+      _mergeSnapshot(snapshot);
+    } on Object catch (error) {
+      if (await _handleUnauthorizedRequest(error)) {
+        return;
+      }
+      if (error is DaemonApiException && error.statusCode == 403) {
+        _eventStreamRetryTimer?.cancel();
+        _eventStreamRetryTimer = null;
+        unawaited(_eventSubscription?.cancel());
+        _eventSubscription = null;
+        if (!mounted) {
+          return;
+        }
+        setState(() {
+          _isForbiddenSnapshot = true;
+          _streamError = _streamForbiddenText;
+          _isEventStreamConnected = false;
+        });
+        return;
+      }
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _streamError = _eventStreamErrorText(error);
+        _isEventStreamConnected = false;
+      });
+    }
+  }
+
+  Future<void> _refreshSnapshotInBackground() async {
+    final api = widget.api;
+    final token = widget.token;
+    final session = widget.session;
+    if (api == null || token == null || session == null) {
+      return;
+    }
+    try {
+      final snapshot = await api.sessionSnapshot(
+        sessionId: session.id,
+        token: token,
+      );
+      _mergeSnapshot(snapshot);
+    } on Object catch (error) {
+      if (await _handleUnauthorizedRequest(error)) {
+        return;
+      }
+      if (error is DaemonApiException && error.statusCode == 403) {
+        _eventStreamRetryTimer?.cancel();
+        _eventStreamRetryTimer = null;
+        unawaited(_eventSubscription?.cancel());
+        _eventSubscription = null;
+        if (!mounted) {
+          return;
+        }
+        setState(() {
+          _isForbiddenSnapshot = true;
+          _streamError = _streamForbiddenText;
+          _isEventStreamConnected = false;
+        });
+        return;
+      }
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _streamError = _eventStreamErrorText(error);
+        _isEventStreamConnected = false;
+      });
+    }
+  }
+
+  Future<void> _repairSessionStateFromSnapshot() async {
+    if (_isRepairingEventStreamState) {
+      return;
+    }
+    final api = widget.api;
+    final token = widget.token;
+    final session = widget.session;
+    if (api == null || token == null || session == null) {
+      return;
+    }
+
+    _isRepairingEventStreamState = true;
+    try {
+      final snapshot = await api.sessionSnapshot(
+        sessionId: session.id,
+        token: token,
+      );
+      if (!mounted) {
+        return;
+      }
+      _mergeSnapshot(snapshot);
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _eventStreamFailureCount = 0;
+      });
+    } on Object catch (error) {
+      if (await _handleUnauthorizedRequest(error)) {
+        return;
+      }
+      _logRequestFailure('repairSessionStateFromSnapshot', error);
+    } finally {
+      _isRepairingEventStreamState = false;
+    }
+  }
+
+  void _repairAndReconnectEventStream() {
+    if (_isRepairingEventStreamState) {
+      return;
+    }
+    unawaited(() async {
+      await _repairSessionStateFromSnapshot();
+      if (!mounted || _isHandlingUnauthorized || !_isAppInForeground) {
+        return;
+      }
+      _connectEventStreamWithStateUpdate(
+        updateState: true,
+        preserveReconnectBanner: true,
+      );
+    }());
+  }
+
+  void _mergeSnapshot(SessionSnapshot snapshot) {
+    if (!mounted) {
+      return;
+    }
+    final shouldStartEventStreamAfterMerge =
+        !_hasStartedEventStream && _mustWaitForInitialSnapshotBeforeStreaming;
+    final currentEvents = _events ?? const <SessionEvent>[];
+    final currentById = {for (final event in currentEvents) event.id: event};
+    for (final event in snapshot.events) {
+      currentById.putIfAbsent(event.id, () => event);
+    }
+    final merged = currentById.values.toList()
+      ..sort((left, right) => left.id.compareTo(right.id));
+    final currentFirstEventId = currentEvents.isEmpty
+        ? null
+        : currentEvents.first.id;
+    final snapshotFirstEventId = snapshot.events.isEmpty
+        ? null
+        : snapshot.events.first.id;
+    final loadedOlderThanSnapshot =
+        currentFirstEventId != null &&
+        snapshotFirstEventId != null &&
+        currentFirstEventId < snapshotFirstEventId;
+    final nextHasMoreHistory = loadedOlderThanSnapshot
+        ? _hasMoreHistory && snapshot.hasMoreHistory
+        : snapshot.hasMoreHistory;
+    final summaryStatus = _summaryStatusAfterSnapshotMerge(
+      mergedEvents: merged,
+      snapshot: snapshot,
+    );
+    final snapshotSummary = snapshot.toSummary();
+    _reconcileOutboxAgainstEvents(merged);
+
+    setState(() {
+      _events = merged;
+      _hasMoreHistory = nextHasMoreHistory;
+      _resolvedSessionSummary = SessionSummary(
+        id: snapshotSummary.id,
+        title: snapshotSummary.title,
+        agentKind: snapshotSummary.agentKind,
+        sourceKind: snapshotSummary.sourceKind,
+        runtimeSessionId: snapshotSummary.runtimeSessionId,
+        runtimeHealth: snapshotSummary.runtimeHealth,
+        runtimeErrorMessage: snapshotSummary.runtimeErrorMessage,
+        status: summaryStatus ?? snapshotSummary.status,
+        workspacePath: snapshotSummary.workspacePath,
+      );
+      _cachedSnapshot = SessionSnapshot(
+        id: snapshot.id,
+        title: snapshot.title,
+        agentKind: snapshot.agentKind,
+        sourceKind: snapshot.sourceKind,
+        runtimeSessionId: snapshot.runtimeSessionId,
+        runtimeHealth: snapshot.runtimeHealth,
+        runtimeErrorMessage: snapshot.runtimeErrorMessage,
+        workspacePath: snapshot.workspacePath,
+        status: summaryStatus ?? snapshot.status,
+        hasMoreHistory: nextHasMoreHistory,
+        events: merged,
+      );
+      _isForbiddenSnapshot = false;
+      _syncAutoExpandedFailedToolWithCurrentEvents();
+      _syncSessionDetailCache();
+    });
+    if (shouldStartEventStreamAfterMerge) {
+      _mustWaitForInitialSnapshotBeforeStreaming = false;
+      _startEventStream(snapshot);
+    }
+  }
+
   void _connectEventStreamWithStateUpdate({
     required bool updateState,
     bool preserveReconnectBanner = false,
@@ -1268,7 +1743,10 @@ class _SessionDetailPageState extends State<SessionDetailPage>
     final api = widget.api;
     final token = widget.token;
     final session = widget.session;
-    if (api == null || token == null || session == null) {
+    if (api == null ||
+        token == null ||
+        session == null ||
+        !_isAppInForeground) {
       return;
     }
 
@@ -1285,6 +1763,9 @@ class _SessionDetailPageState extends State<SessionDetailPage>
     } else {
       markConnecting();
     }
+    _eventStreamSawErrorThisConnection = false;
+    _eventStreamIdleFor = Duration.zero;
+    _startHeartbeatMonitor();
     _eventSubscription = api
         .sessionEvents(
           sessionId: session.id,
@@ -1296,10 +1777,18 @@ class _SessionDetailPageState extends State<SessionDetailPage>
             if (!mounted) {
               return;
             }
+            _eventStreamIdleFor = Duration.zero;
+            final isHeartbeatEvent = event.eventType == 'session.heartbeat';
+            if (event.eventType == 'session.resync.required') {
+              _repairAndReconnectEventStream();
+              return;
+            }
+            _reconcileOutboxAgainstEvents([event]);
             setState(() {
               final reconnectingError = _streamError;
               final events = _events ?? <SessionEvent>[];
-            if (!events.any((item) => item.id == event.id)) {
+              if (!isHeartbeatEvent &&
+                  !events.any((item) => item.id == event.id)) {
                 final insertionIndex = events.indexWhere(
                   (item) => item.id > event.id,
                 );
@@ -1314,7 +1803,7 @@ class _SessionDetailPageState extends State<SessionDetailPage>
                 }
                 if (event.eventType == 'session.status.changed') {
                   final nextStatus = _sessionStatusFromPayload(event.payload);
-                  final summary = _resolvedSessionSummary;
+                  final summary = _sessionSummary;
                   if (nextStatus != null && summary != null) {
                     _resolvedSessionSummary = SessionSummary(
                       id: summary.id,
@@ -1322,6 +1811,8 @@ class _SessionDetailPageState extends State<SessionDetailPage>
                       agentKind: summary.agentKind,
                       sourceKind: summary.sourceKind,
                       runtimeSessionId: summary.runtimeSessionId,
+                      runtimeHealth: summary.runtimeHealth,
+                      runtimeErrorMessage: summary.runtimeErrorMessage,
                       status: nextStatus,
                       workspacePath: summary.workspacePath,
                     );
@@ -1357,9 +1848,11 @@ class _SessionDetailPageState extends State<SessionDetailPage>
               _streamError = null;
               _eventStreamFailureCount = 0;
               _isEventStreamConnected = true;
-              _syncSessionDetailCache();
+              if (!isHeartbeatEvent) {
+                _syncSessionDetailCache();
+              }
             });
-            if (_isNearBottom) {
+            if (!isHeartbeatEvent && _isNearBottom) {
               WidgetsBinding.instance.addPostFrameCallback((_) {
                 if (!mounted) {
                   return;
@@ -1369,6 +1862,9 @@ class _SessionDetailPageState extends State<SessionDetailPage>
             }
           },
           onError: (Object error) {
+            _eventStreamHeartbeatTimer?.cancel();
+            _eventStreamHeartbeatTimer = null;
+            _eventStreamSawErrorThisConnection = true;
             if (error is DaemonApiException && error.statusCode == 403) {
               unawaited(_eventSubscription?.cancel());
               _eventSubscription = null;
@@ -1398,22 +1894,34 @@ class _SessionDetailPageState extends State<SessionDetailPage>
             }
           },
           onDone: () {
+            _eventStreamHeartbeatTimer?.cancel();
+            _eventStreamHeartbeatTimer = null;
             if (_isHandlingUnauthorized) {
               return;
             }
             if (!mounted) {
               return;
             }
+            if (_eventStreamSawErrorThisConnection) {
+              return;
+            }
+            var shouldRepairAfterDone = false;
             setState(() {
               if (_streamError != null &&
                   _streamError != _streamForbiddenText &&
                   _streamError != _streamOfflineText) {
+                _eventStreamFailureCount += 1;
                 _streamError = _eventStreamFailureCount >= 3
                     ? _streamStillReconnectingText
                     : _streamReconnectingText;
+                shouldRepairAfterDone = _eventStreamFailureCount >= 3;
               }
               _isEventStreamConnected = false;
             });
+            if (shouldRepairAfterDone) {
+              _repairAndReconnectEventStream();
+              return;
+            }
             if (_streamError != null &&
                 _streamError != _streamForbiddenText &&
                 _streamError != _streamOfflineText &&
@@ -1422,6 +1930,42 @@ class _SessionDetailPageState extends State<SessionDetailPage>
             }
           },
         );
+  }
+
+  void _startHeartbeatMonitor() {
+    _eventStreamHeartbeatTimer?.cancel();
+    _eventStreamHeartbeatTimer = Timer.periodic(_eventStreamHeartbeatProbe, (
+      _,
+    ) {
+      if (!mounted || !_isAppInForeground) {
+        return;
+      }
+      _eventStreamIdleFor += _eventStreamHeartbeatProbe;
+      if (_eventStreamIdleFor < _eventStreamHeartbeatTimeout) {
+        return;
+      }
+      _eventStreamHeartbeatTimer?.cancel();
+      _eventStreamHeartbeatTimer = null;
+      unawaited(_eventSubscription?.cancel());
+      _eventSubscription = null;
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _eventStreamFailureCount += 1;
+        _streamError = _eventStreamFailureCount >= 3
+            ? _streamStillReconnectingText
+            : _streamReconnectingText;
+        _isEventStreamConnected = false;
+      });
+      if (_eventStreamFailureCount >= 3) {
+        _repairAndReconnectEventStream();
+        return;
+      }
+      if (_eventStreamFailureCount < 3) {
+        _scheduleEventStreamReconnect();
+      }
+    });
   }
 
   void _startEventStream(SessionSnapshot snapshot) {
@@ -1514,9 +2058,11 @@ class _SessionDetailPageState extends State<SessionDetailPage>
           future: _snapshotFuture,
           builder: (context, snapshot) {
             final cachedSnapshot = _cachedSnapshot;
+            final hasLiveEvents = (_events?.isNotEmpty ?? false);
             final useInitialTimelineFade =
                 snapshot.connectionState == ConnectionState.done &&
                 cachedSnapshot == null;
+            _ensureConcurrentOpenWork();
             var canUseComposer =
                 widget.api != null &&
                 widget.token != null &&
@@ -1526,7 +2072,8 @@ class _SessionDetailPageState extends State<SessionDetailPage>
 
             Widget timeline;
             if (snapshot.connectionState != ConnectionState.done &&
-                cachedSnapshot == null) {
+                cachedSnapshot == null &&
+                !hasLiveEvents) {
               timeline = const _ChatTimelineSkeleton();
             } else if (snapshot.hasError) {
               final error = snapshot.error!;
@@ -1574,7 +2121,63 @@ class _SessionDetailPageState extends State<SessionDetailPage>
               final session = snapshot.data ?? cachedSnapshot;
               if (session == null) {
                 _isForbiddenSnapshot = false;
-                timeline = const _PreviewTimeline();
+                if (widget.session != null && hasLiveEvents) {
+                  final fallbackSession = SessionSnapshot(
+                    id: widget.session!.id,
+                    title: widget.session!.title,
+                    agentKind: widget.session!.agentKind,
+                    sourceKind: widget.session!.sourceKind,
+                    runtimeSessionId: widget.session!.runtimeSessionId,
+                    runtimeHealth: widget.session!.runtimeHealth,
+                    runtimeErrorMessage: widget.session!.runtimeErrorMessage,
+                    workspacePath: widget.session!.workspacePath,
+                    status: _sessionSummary?.status ?? widget.session!.status,
+                    hasMoreHistory: _hasMoreHistory,
+                    events: _events!,
+                  );
+                  final timelineChild = _SessionTimeline(
+                    scrollController: _timelineScrollController,
+                    events: _eventsWithPendingOutbox(),
+                    expandedItemKeys: _expandedTimelineItemKeys,
+                    daemonUrl: widget.daemonUrl,
+                    sessionId: fallbackSession.id,
+                    sessionStatus: statusPillText,
+                    openExternalLink: widget.openExternalLink,
+                    shareAttachments: widget.shareAttachments,
+                    showDebugTimelineItems: _showDebugTimelineItems,
+                    token: widget.token,
+                    hasMoreHistory: _hasMoreHistory,
+                    isLoadingOlderEvents: _isLoadingOlderEvents,
+                    prependedItemKeys: _prependedTimelineItemKeys,
+                    onLoadOlderEvents: _loadOlderEvents,
+                    onToggleExpanded: _toggleTimelineItemExpanded,
+                    onNearTop: _maybeLoadOlderEventsOnScroll,
+                  );
+                  timeline = Column(
+                    children: [
+                      _StreamStatusBanner(
+                        errorText: _streamError,
+                        collapsingText: _collapsingStreamBannerText,
+                        collapseCount: _streamBannerCollapseCount,
+                        isConnected: _isEventStreamConnected,
+                        onRetry: _connectEventStream,
+                        onBackToSessions: () =>
+                            Navigator.of(context).maybePop(),
+                      ),
+                      if (_isLoadingOlderEvents)
+                        const Padding(
+                          padding: EdgeInsets.fromLTRB(16, 12, 16, 0),
+                          child: _OlderHistoryLoader(),
+                        ),
+                      Expanded(
+                        key: const ValueKey('session-timeline-expanded'),
+                        child: timelineChild,
+                      ),
+                    ],
+                  );
+                } else {
+                  timeline = const _PreviewTimeline();
+                }
               } else {
                 _isForbiddenSnapshot = false;
                 canUseComposer =
@@ -1582,10 +2185,9 @@ class _SessionDetailPageState extends State<SessionDetailPage>
                     widget.token != null &&
                     widget.session != null &&
                     !_isForbiddenStream;
-                _startEventStream(session);
                 final timelineChild = _SessionTimeline(
                   scrollController: _timelineScrollController,
-                  events: _events ?? session.events,
+                  events: _eventsWithPendingOutbox(),
                   expandedItemKeys: _expandedTimelineItemKeys,
                   daemonUrl: widget.daemonUrl,
                   sessionId: session.id,
@@ -1680,7 +2282,7 @@ class _SessionDetailPageState extends State<SessionDetailPage>
                   }),
                   removingAttachmentIds: _removingAttachmentIds,
                   onRemoveAttachment: _removeAttachment,
-                  onRetrySend: _sendMessage,
+                  onRetrySend: _retryFailedSend,
                   onSend: _sendMessage,
                 ),
               ],
@@ -2293,7 +2895,8 @@ class _SessionTimeline extends StatefulWidget {
   final Set<String> prependedItemKeys;
   final VoidCallback onLoadOlderEvents;
   final ValueChanged<String> onToggleExpanded;
-  final ValueChanged<double> onNearTop;
+  final void Function(double pixelsFromTop, {bool allowBeforeAutoScroll})
+  onNearTop;
 
   @override
   State<_SessionTimeline> createState() => _SessionTimelineState();
@@ -2357,10 +2960,18 @@ class _SessionTimelineState extends State<_SessionTimeline> {
 
     return NotificationListener<ScrollNotification>(
       onNotification: (notification) {
+        final allowBeforeAutoScroll =
+            (notification is ScrollUpdateNotification &&
+                notification.dragDetails != null) ||
+            (notification is OverscrollNotification &&
+                notification.dragDetails != null);
         if (notification.metrics.axis == Axis.vertical &&
             (notification is ScrollUpdateNotification ||
                 notification is OverscrollNotification)) {
-          widget.onNearTop(notification.metrics.pixels);
+          widget.onNearTop(
+            notification.metrics.pixels,
+            allowBeforeAutoScroll: allowBeforeAutoScroll,
+          );
         }
         return false;
       },
@@ -2592,6 +3203,40 @@ String? _latestMeaningfulSessionStatus(
     }
   }
   return _normalizedStatus(fallbackStatus);
+}
+
+String? _summaryStatusAfterSnapshotMerge({
+  required List<SessionEvent> mergedEvents,
+  required SessionSnapshot snapshot,
+}) {
+  final snapshotStatus = _normalizedStatus(snapshot.status);
+  if (_shouldPreferCurrentSessionStatus(snapshotStatus)) {
+    final statusFromSnapshotEvents = _latestMeaningfulSessionStatus(
+      snapshot.events,
+    );
+    if (_shouldPreferCurrentSessionStatus(statusFromSnapshotEvents)) {
+      return statusFromSnapshotEvents;
+    }
+    final snapshotLatestEventId = snapshot.events.isEmpty
+        ? null
+        : snapshot.events.last.id;
+    for (final event in mergedEvents.reversed) {
+      if (snapshotLatestEventId != null && event.id <= snapshotLatestEventId) {
+        break;
+      }
+      if (event.eventType != 'session.status.changed') {
+        continue;
+      }
+      if (_sessionStatusFromPayload(event.payload) case final status?) {
+        return status;
+      }
+    }
+    return snapshotStatus;
+  }
+  return _latestMeaningfulSessionStatus(
+    mergedEvents,
+    fallbackStatus: snapshot.status,
+  );
 }
 
 String? _sessionStatusFromPayload(Map<String, Object?> payload) {
@@ -4467,7 +5112,11 @@ class _CollapsibleToolCallCardState extends State<_CollapsibleToolCallCard> {
     final outputText =
         widget.output ??
         (widget.status == 'inProgress' ? 'Waiting for output...' : 'No output');
-    final summary = _toolSummaryText(widget.label, widget.output, widget.status);
+    final summary = _toolSummaryText(
+      widget.label,
+      widget.output,
+      widget.status,
+    );
     final tone = _compactTimelineToneForStatus(
       widget.status,
       exitCode: widget.exitCode,
@@ -4943,10 +5592,7 @@ Color _compactTimelineToneColor(_CompactTimelineTone tone) {
 }
 
 class _CompactTimelineStatusDot extends StatefulWidget {
-  const _CompactTimelineStatusDot({
-    required this.tone,
-    this.pulse = false,
-  });
+  const _CompactTimelineStatusDot({required this.tone, this.pulse = false});
 
   final _CompactTimelineTone tone;
   final bool pulse;

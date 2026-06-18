@@ -1,12 +1,13 @@
 use axum::body::Body;
 use axum::http::Request;
 use futures_util::StreamExt;
+use tokio::time::{Duration, timeout};
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tower::ServiceExt;
 
 use agent_dock_daemon::{
-    adapters::process::{spawn_command, LaunchCommand},
+    adapters::process::{LaunchCommand, spawn_command},
     app::build_test_router_with_spawner,
 };
 
@@ -30,15 +31,19 @@ async fn websocket_stream_replays_events_after_cursor() {
                 .method("POST")
                 .uri("/api/auth/login")
                 .header("content-type", "application/json")
-                .body(Body::from(
-                    r#"{"username":"admin","password":"1234"}"#,
-                ))
+                .body(Body::from(r#"{"username":"admin","password":"1234"}"#))
                 .unwrap(),
         )
         .await
         .unwrap();
 
-    let cookie = login.headers().get("set-cookie").unwrap().to_str().unwrap().to_string();
+    let cookie = login
+        .headers()
+        .get("set-cookie")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
 
     let create = app
         .clone()
@@ -56,7 +61,9 @@ async fn websocket_stream_replays_events_after_cursor() {
         .await
         .unwrap();
 
-    let create_body = axum::body::to_bytes(create.into_body(), usize::MAX).await.unwrap();
+    let create_body = axum::body::to_bytes(create.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let create_json: serde_json::Value = serde_json::from_slice(&create_body).unwrap();
     let session_id = create_json["id"].as_str().unwrap().to_string();
 
@@ -74,9 +81,7 @@ async fn websocket_stream_replays_events_after_cursor() {
         .headers_mut()
         .insert("cookie", login.headers().get("set-cookie").unwrap().clone());
 
-    let (mut socket, _) = connect_async(request)
-        .await
-        .unwrap();
+    let (mut socket, _) = connect_async(request).await.unwrap();
 
     let first = socket.next().await.unwrap().unwrap();
     let text = first.into_text().unwrap();
@@ -133,15 +138,15 @@ async fn websocket_stream_accepts_bearer_token() {
                 .method("POST")
                 .uri("/api/auth/login")
                 .header("content-type", "application/json")
-                .body(Body::from(
-                    r#"{"username":"admin","password":"1234"}"#,
-                ))
+                .body(Body::from(r#"{"username":"admin","password":"1234"}"#))
                 .unwrap(),
         )
         .await
         .unwrap();
 
-    let login_body = axum::body::to_bytes(login.into_body(), usize::MAX).await.unwrap();
+    let login_body = axum::body::to_bytes(login.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let login_json: serde_json::Value = serde_json::from_slice(&login_body).unwrap();
     let token = login_json["token"].as_str().unwrap().to_string();
 
@@ -161,7 +166,9 @@ async fn websocket_stream_accepts_bearer_token() {
         .await
         .unwrap();
 
-    let create_body = axum::body::to_bytes(create.into_body(), usize::MAX).await.unwrap();
+    let create_body = axum::body::to_bytes(create.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let create_json: serde_json::Value = serde_json::from_slice(&create_body).unwrap();
     let session_id = create_json["id"].as_str().unwrap().to_string();
 
@@ -203,15 +210,15 @@ async fn websocket_stream_accepts_query_token_fallback() {
                 .method("POST")
                 .uri("/api/auth/login")
                 .header("content-type", "application/json")
-                .body(Body::from(
-                    r#"{"username":"admin","password":"1234"}"#,
-                ))
+                .body(Body::from(r#"{"username":"admin","password":"1234"}"#))
                 .unwrap(),
         )
         .await
         .unwrap();
 
-    let login_body = axum::body::to_bytes(login.into_body(), usize::MAX).await.unwrap();
+    let login_body = axum::body::to_bytes(login.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let login_json: serde_json::Value = serde_json::from_slice(&login_body).unwrap();
     let token = login_json["token"].as_str().unwrap().to_string();
 
@@ -231,7 +238,9 @@ async fn websocket_stream_accepts_query_token_fallback() {
         .await
         .unwrap();
 
-    let create_body = axum::body::to_bytes(create.into_body(), usize::MAX).await.unwrap();
+    let create_body = axum::body::to_bytes(create.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let create_json: serde_json::Value = serde_json::from_slice(&create_body).unwrap();
     let session_id = create_json["id"].as_str().unwrap().to_string();
 
@@ -251,4 +260,193 @@ async fn websocket_stream_accepts_query_token_fallback() {
     let text = first.into_text().unwrap();
 
     assert!(text.contains("\"eventType\":\"session.created\""));
+}
+
+#[tokio::test]
+async fn websocket_stream_emits_heartbeat_when_idle() {
+    let app = build_test_router_with_spawner(std::sync::Arc::new(|_command: LaunchCommand| {
+        spawn_command(LaunchCommand {
+            program: "sh".into(),
+            args: vec!["-lc".into(), "true".into()],
+        })
+    }))
+    .await;
+
+    let login = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/auth/login")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"username":"admin","password":"1234"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let cookie = login
+        .headers()
+        .get("set-cookie")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+
+    let create = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/sessions")
+                .header("content-type", "application/json")
+                .header("cookie", &cookie)
+                .body(Body::from(
+                    r#"{"rootId":"workspace","path":"repo","agentKind":"claude"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let create_body = axum::body::to_bytes(create.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let create_json: serde_json::Value = serde_json::from_slice(&create_body).unwrap();
+    let session_id = create_json["id"].as_str().unwrap().to_string();
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let app_for_server = app.clone();
+    tokio::spawn(async move {
+        axum::serve(listener, app_for_server).await.unwrap();
+    });
+
+    let mut request = format!("ws://{address}/ws/sessions/{session_id}/events?after=0")
+        .into_client_request()
+        .unwrap();
+    request
+        .headers_mut()
+        .insert("cookie", cookie.parse().unwrap());
+
+    let (mut socket, _) = connect_async(request).await.unwrap();
+
+    let created = timeout(Duration::from_secs(2), socket.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap()
+        .into_text()
+        .unwrap();
+    let created_json: serde_json::Value = serde_json::from_str(&created).unwrap();
+
+    assert_eq!(created_json["eventType"], "session.created");
+
+    let heartbeat = timeout(Duration::from_secs(2), socket.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap()
+        .into_text()
+        .unwrap();
+    let heartbeat_json: serde_json::Value = serde_json::from_str(&heartbeat).unwrap();
+
+    assert_eq!(heartbeat_json["eventType"], "session.heartbeat");
+    assert_eq!(heartbeat_json["id"], created_json["id"]);
+    assert_eq!(heartbeat_json["payload"], serde_json::json!({}));
+}
+
+#[tokio::test]
+async fn websocket_stream_requests_resync_when_cursor_is_ahead_of_latest_event() {
+    let app = build_test_router_with_spawner(std::sync::Arc::new(|_command: LaunchCommand| {
+        spawn_command(LaunchCommand {
+            program: "sh".into(),
+            args: vec!["-lc".into(), "true".into()],
+        })
+    }))
+    .await;
+
+    let login = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/auth/login")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"username":"admin","password":"1234"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let cookie = login
+        .headers()
+        .get("set-cookie")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+
+    let create = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/sessions")
+                .header("content-type", "application/json")
+                .header("cookie", &cookie)
+                .body(Body::from(
+                    r#"{"rootId":"workspace","path":"repo","agentKind":"claude"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let create_body = axum::body::to_bytes(create.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let create_json: serde_json::Value = serde_json::from_slice(&create_body).unwrap();
+    let session_id = create_json["id"].as_str().unwrap().to_string();
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let app_for_server = app.clone();
+    tokio::spawn(async move {
+        axum::serve(listener, app_for_server).await.unwrap();
+    });
+
+    let latest_id = create_json["events"].as_array().unwrap().last().unwrap()["id"]
+        .as_i64()
+        .unwrap();
+    let mut request = format!(
+        "ws://{address}/ws/sessions/{session_id}/events?after={}",
+        latest_id + 100
+    )
+    .into_client_request()
+    .unwrap();
+    request
+        .headers_mut()
+        .insert("cookie", cookie.parse().unwrap());
+
+    let (mut socket, _) = connect_async(request).await.unwrap();
+    let resync = timeout(Duration::from_secs(2), socket.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap()
+        .into_text()
+        .unwrap();
+    let resync_json: serde_json::Value = serde_json::from_str(&resync).unwrap();
+
+    assert_eq!(resync_json["eventType"], "session.resync.required");
+    assert_eq!(resync_json["id"].as_i64(), Some(latest_id));
+    assert_eq!(
+        resync_json["payload"],
+        serde_json::json!({
+            "reason": "cursor_ahead",
+            "requestedAfter": latest_id + 100,
+            "latestEventId": latest_id
+        })
+    );
 }

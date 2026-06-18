@@ -9,6 +9,9 @@ pub struct SessionRecord {
     pub title: Option<String>,
     pub runtime_session_id: Option<String>,
     pub status: String,
+    pub runtime_health: String,
+    pub runtime_error_kind: Option<String>,
+    pub runtime_error_message: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -16,6 +19,13 @@ pub struct StoredEvent {
     pub id: i64,
     pub event_type: String,
     pub payload_json: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PendingUserMessage {
+    pub id: i64,
+    pub text: String,
+    pub image_paths: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -28,6 +38,9 @@ pub struct SessionSummary {
     pub title: Option<String>,
     pub runtime_session_id: Option<String>,
     pub status: String,
+    pub runtime_health: String,
+    pub runtime_error_kind: Option<String>,
+    pub runtime_error_message: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

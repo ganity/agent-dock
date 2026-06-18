@@ -180,6 +180,74 @@ async fn resume_session_endpoint_recovers_attached_codex_runtime() {
 }
 
 #[tokio::test]
+async fn resume_session_endpoint_returns_latest_window_instead_of_full_history() {
+    let app = build_test_router().await;
+
+    let cookie = login_for_cookie(&app, "admin").await;
+
+    let create = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/sessions")
+                .header("content-type", "application/json")
+                .header("cookie", cookie.clone())
+                .body(Body::from(
+                    r#"{"rootId":"workspace","path":"repo","agentKind":"claude"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let create_body = to_bytes(create.into_body(), usize::MAX).await.unwrap();
+    let create_json: serde_json::Value = serde_json::from_slice(&create_body).unwrap();
+    let session_id = create_json["id"].as_str().unwrap().to_string();
+
+    for event_index in 1..=60 {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/sessions/{session_id}/messages"))
+                    .header("content-type", "application/json")
+                    .header("cookie", cookie.clone())
+                    .body(Body::from(format!(
+                        r#"{{"message":"message-{event_index}","imagePaths":[]}}"#,
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    let resume = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/sessions/{session_id}/resume"))
+                .header("cookie", cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resume.status(), StatusCode::OK);
+    let body = to_bytes(resume.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let events = json["events"].as_array().unwrap();
+
+    assert_eq!(events.len(), 50);
+    assert_eq!(json["hasMoreHistory"].as_bool(), Some(true));
+    assert!(events.first().unwrap()["id"].as_i64().unwrap() > 1);
+}
+
+#[tokio::test]
 async fn attached_claude_session_can_resume_and_emit_assistant_message() {
     let app = build_test_router_with_spawner(Arc::new(|_command: LaunchCommand| {
         spawn_command(LaunchCommand {

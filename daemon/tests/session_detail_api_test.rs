@@ -1,4 +1,4 @@
-use axum::body::{to_bytes, Body};
+use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode};
 use tower::ServiceExt;
 
@@ -54,6 +54,9 @@ async fn get_session_detail_returns_snapshot_events() {
     assert!(text.contains("\"agentKind\":\"claude\""));
     assert_eq!(json["workspacePath"].as_str(), Some("repo"));
     assert_eq!(json["status"].as_str(), Some("created"));
+    assert_eq!(json["runtimeHealth"].as_str(), Some("unknown"));
+    assert!(json["runtimeErrorKind"].is_null());
+    assert!(json["runtimeErrorMessage"].is_null());
 }
 
 #[tokio::test]
@@ -115,7 +118,9 @@ async fn get_session_detail_supports_latest_window_and_before_cursor() {
         .unwrap();
 
     assert_eq!(latest_window.status(), StatusCode::OK);
-    let latest_body = to_bytes(latest_window.into_body(), usize::MAX).await.unwrap();
+    let latest_body = to_bytes(latest_window.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let latest_json: serde_json::Value = serde_json::from_slice(&latest_body).unwrap();
     let latest_events = latest_json["events"].as_array().unwrap();
     assert_eq!(latest_events.len(), 3);
@@ -127,7 +132,9 @@ async fn get_session_detail_supports_latest_window_and_before_cursor() {
     let older_window = app
         .oneshot(
             Request::builder()
-                .uri(format!("/api/sessions/{session_id}?limit=3&before={before}"))
+                .uri(format!(
+                    "/api/sessions/{session_id}?limit=3&before={before}"
+                ))
                 .header("cookie", cookie)
                 .body(Body::empty())
                 .unwrap(),
@@ -136,14 +143,20 @@ async fn get_session_detail_supports_latest_window_and_before_cursor() {
         .unwrap();
 
     assert_eq!(older_window.status(), StatusCode::OK);
-    let older_body = to_bytes(older_window.into_body(), usize::MAX).await.unwrap();
+    let older_body = to_bytes(older_window.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let older_json: serde_json::Value = serde_json::from_slice(&older_body).unwrap();
     let older_events = older_json["events"].as_array().unwrap();
     assert_eq!(older_events.len(), 3);
     assert_eq!(older_json["hasMoreHistory"].as_bool(), Some(true));
     assert!(older_events[0]["id"].as_i64().unwrap() < older_events[1]["id"].as_i64().unwrap());
     assert!(older_events[1]["id"].as_i64().unwrap() < older_events[2]["id"].as_i64().unwrap());
-    assert!(older_events.iter().all(|event| event["id"].as_i64().unwrap() < before));
+    assert!(
+        older_events
+            .iter()
+            .all(|event| event["id"].as_i64().unwrap() < before)
+    );
     assert!(older_events[2]["id"].as_i64().unwrap() < latest_events[0]["id"].as_i64().unwrap());
 }
 

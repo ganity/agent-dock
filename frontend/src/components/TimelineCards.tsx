@@ -76,6 +76,16 @@ export function AssistantCard(props: { text: string }) {
   );
 }
 
+export function SessionErrorCard(props: { message: string; willRetry: boolean }) {
+  return (
+    <section className="activity-card panel stack" role="status">
+      <div className="card-kicker">Runtime error</div>
+      <p>{props.message}</p>
+      {props.willRetry ? <p className="technical-text">Retrying</p> : null}
+    </section>
+  );
+}
+
 export function ActivitySummaryCard(props: {
   groups: Array<{ label: string; status: string; count: number }>;
 }) {
