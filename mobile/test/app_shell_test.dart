@@ -712,8 +712,77 @@ void main() {
     expect(find.text(truncatedPath), findsOneWidget);
     expect(find.text(fullPath), findsNothing);
     final pathText = tester.widget<Text>(find.text(truncatedPath));
-    expect(pathText.maxLines, 2);
+    expect(pathText.maxLines, 1);
     expect(pathText.overflow, TextOverflow.ellipsis);
+  });
+
+  testWidgets('session rows place metadata after the title on the first line', (
+    tester,
+  ) async {
+    await pumpApp(
+      tester,
+      api: FakeDaemonApi(
+        bootstrap: const MobileBootstrap(
+          daemonVersion: '0.1.0',
+          user: CurrentUser(id: 'usr_workspace', displayName: 'Workspace'),
+          roots: <WorkspaceRoot>[],
+          sessions: [
+            SessionSummary(
+              id: 'sess_1',
+              title: 'dock',
+              agentKind: 'codex',
+              sourceKind: 'managed',
+              runtimeSessionId: 'runtime_1',
+              status: 'running',
+              workspacePath: '/home/jhz/tools/agent-workspace',
+            ),
+          ],
+          voice: VoiceConfig(doubaoDirectAvailable: false),
+        ),
+      ),
+    );
+
+    await tester.enterText(find.byType(TextField).at(0), 'workspace');
+    await tester.enterText(find.byType(TextField).at(1), '1234');
+    await tester.tap(find.text('Sign in'));
+    await tester.pumpAndSettle();
+
+    final sessionCard = find.byKey(
+      const ValueKey('session-row-inkwell-sess_1'),
+    );
+    final titleCenter = tester
+        .getCenter(
+          find.descendant(of: sessionCard, matching: find.text('dock')),
+        )
+        .dy;
+    final agentCenter = tester
+        .getCenter(
+          find.descendant(of: sessionCard, matching: find.text('codex')),
+        )
+        .dy;
+    final statusCenter = tester
+        .getCenter(
+          find.descendant(of: sessionCard, matching: find.text('running')),
+        )
+        .dy;
+    final pathTop = tester
+        .getTopLeft(
+          find.descendant(
+            of: sessionCard,
+            matching: find.text('/home/jhz/tools/agent-workspace'),
+          ),
+        )
+        .dy;
+
+    expect(agentCenter, closeTo(titleCenter, 1));
+    expect(statusCenter, closeTo(titleCenter, 1));
+    expect(pathTop, greaterThan(titleCenter));
+
+    final titleText = tester.widget<Text>(
+      find.descendant(of: sessionCard, matching: find.text('dock')),
+    );
+    expect(titleText.maxLines, 1);
+    expect(titleText.overflow, TextOverflow.ellipsis);
   });
 
   testWidgets('orders running sessions before completed sessions', (

@@ -1320,28 +1320,20 @@ class _SessionRow extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                      crossAxisAlignment: CrossAxisAlignment.center,
                       children: [
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                title,
-                                style: Theme.of(context).textTheme.titleLarge,
-                              ),
-                              const SizedBox(height: 12),
-                              Wrap(
-                                spacing: 8,
-                                runSpacing: 8,
-                                children: [
-                                  _MetaChip(label: session.agentKind),
-                                  _StatusPill(label: session.status),
-                                ],
-                              ),
-                            ],
+                        Flexible(
+                          child: Text(
+                            title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.titleLarge,
                           ),
                         ),
+                        const SizedBox(width: 12),
+                        _MetaChip(label: session.agentKind),
+                        const SizedBox(width: 8),
+                        _StatusPill(label: session.status),
                       ],
                     ),
                     const SizedBox(height: 12),
@@ -1354,7 +1346,7 @@ class _SessionRow extends StatelessWidget {
                     ],
                     Text(
                       workspacePath,
-                      maxLines: 2,
+                      maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
                   ],
