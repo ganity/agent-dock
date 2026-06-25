@@ -509,6 +509,65 @@ describe("SessionDetailView", () => {
     expect(onLoadOlder).toHaveBeenCalledTimes(1);
   });
 
+  it("automatically requests older history when the transcript does not fill the viewport", () => {
+    const onLoadOlder = vi.fn();
+
+    const { rerender } = render(
+      <SessionDetailView
+        session={{
+          id: "sess-short-history",
+          title: "Launch Pad",
+          agentKind: "codex",
+          sourceKind: "managed",
+          workspacePath: "/tmp/workspace",
+          status: "running",
+          hasMoreHistory: true,
+          events: [
+            { id: 61, eventType: "user.message", payload: { text: "older" } },
+            { id: 62, eventType: "assistant.message", payload: { text: "newer" } },
+          ],
+        }}
+        onBack={() => {}}
+        onSend={() => {}}
+        onUploadImage={async () => ""}
+        onConnectVoiceInput={() => ({ close() {} } as WebSocket)}
+        onLoadOlder={onLoadOlder}
+        loadingHistory={false}
+      />,
+    );
+
+    const transcript = document.querySelector(".session-transcript") as HTMLElement;
+    Object.defineProperty(transcript, "scrollTop", { value: 0, configurable: true, writable: true });
+    Object.defineProperty(transcript, "scrollHeight", { value: 240, configurable: true });
+    Object.defineProperty(transcript, "clientHeight", { value: 400, configurable: true });
+
+    rerender(
+      <SessionDetailView
+        session={{
+          id: "sess-short-history",
+          title: "Launch Pad",
+          agentKind: "codex",
+          sourceKind: "managed",
+          workspacePath: "/tmp/workspace",
+          status: "running",
+          hasMoreHistory: true,
+          events: [
+            { id: 61, eventType: "user.message", payload: { text: "older" } },
+            { id: 62, eventType: "assistant.message", payload: { text: "newer" } },
+          ],
+        }}
+        onBack={() => {}}
+        onSend={() => {}}
+        onUploadImage={async () => ""}
+        onConnectVoiceInput={() => ({ close() {} } as WebSocket)}
+        onLoadOlder={onLoadOlder}
+        loadingHistory={false}
+      />,
+    );
+
+    expect(onLoadOlder).toHaveBeenCalledTimes(1);
+  });
+
   it("only auto-follows new events when the transcript is already near the bottom", () => {
     const { rerender } = render(
       <SessionDetailView

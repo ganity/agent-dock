@@ -6,6 +6,8 @@ import type {
   ResumeCandidate,
   SessionDetail,
   SessionSummary,
+  WorkspaceEntryListing,
+  WorkspaceFile,
   WorkspaceDirectoryListing,
   WorkspaceRoot,
 } from "./types";
@@ -62,6 +64,34 @@ export async function listDirectories(path: string): Promise<WorkspaceDirectoryL
   }
 
   return (await response.json()) as WorkspaceDirectoryListing;
+}
+
+export async function listSessionWorkspaceEntries(
+  sessionId: string,
+  path: string,
+): Promise<WorkspaceEntryListing> {
+  const response = await fetch(
+    `/api/sessions/${encodeURIComponent(sessionId)}/workspace/entries?path=${encodeURIComponent(path)}`,
+  );
+  if (!response.ok) {
+    throw new Error("Failed to load files");
+  }
+
+  return (await response.json()) as WorkspaceEntryListing;
+}
+
+export async function readSessionWorkspaceFile(
+  sessionId: string,
+  path: string,
+): Promise<WorkspaceFile> {
+  const response = await fetch(
+    `/api/sessions/${encodeURIComponent(sessionId)}/workspace/file?path=${encodeURIComponent(path)}`,
+  );
+  if (!response.ok) {
+    throw new Error("Failed to load file");
+  }
+
+  return (await response.json()) as WorkspaceFile;
 }
 
 export async function listResumeCandidates(input: {

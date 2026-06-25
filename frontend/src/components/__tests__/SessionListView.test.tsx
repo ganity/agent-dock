@@ -13,6 +13,7 @@ describe("SessionListView", () => {
     const onAttach = vi.fn();
     const onSelect = vi.fn();
     const onDelete = vi.fn();
+    const onBrowseFiles = vi.fn();
 
     render(
       <SessionListView
@@ -37,6 +38,7 @@ describe("SessionListView", () => {
         onAttach={onAttach}
         onSelect={onSelect}
         onDelete={onDelete}
+        onBrowseFiles={onBrowseFiles}
       />,
     );
 
@@ -94,6 +96,11 @@ describe("SessionListView", () => {
 
     fireEvent.click(sessionCard);
     expect(onSelect).toHaveBeenCalledWith("sess-1");
+
+    fireEvent.click(menuButton);
+    const filesButton = screen.getByRole("button", { name: "Browse files for Launch Pad" });
+    fireEvent.click(filesButton);
+    expect(onBrowseFiles).toHaveBeenCalledWith("sess-1");
 
     fireEvent.click(menuButton);
     const deleteButton = screen.getByRole("button", { name: "Delete Launch Pad" });

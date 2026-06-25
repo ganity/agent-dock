@@ -247,6 +247,47 @@ fn protocol_only_completes_the_matching_in_flight_turn() {
 }
 
 #[test]
+fn protocol_prefers_latest_turn_started_binding_before_completion() {
+    let mut protocol = ready_protocol();
+
+    let outgoing = protocol
+        .enqueue_user_message(UserMessage {
+            text: "first".into(),
+            image_paths: Vec::new(),
+        })
+        .unwrap();
+
+    assert_eq!(outgoing.len(), 1);
+    assert!(!protocol.can_accept_user_message());
+
+    let stale_started = protocol
+        .handle_server_line(
+            r#"{"jsonrpc":"2.0","method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-stale"}}}"#,
+        )
+        .unwrap();
+    assert!(stale_started.event.is_none());
+    assert!(!stale_started.completed_user_message);
+
+    let current_started = protocol
+        .handle_server_line(
+            r#"{"jsonrpc":"2.0","method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-current"}}}"#,
+        )
+        .unwrap();
+    assert!(current_started.event.is_none());
+    assert!(!current_started.completed_user_message);
+
+    let current_completed = protocol
+        .handle_server_line(
+            r#"{"jsonrpc":"2.0","method":"turn/completed","params":{"turnId":"turn-current","threadId":"thread-1","status":{"type":"completed"}}}"#,
+        )
+        .unwrap();
+
+    assert!(current_completed.completed_user_message);
+    assert!(current_completed.can_accept_user_message);
+    assert!(protocol.can_accept_user_message());
+}
+
+#[test]
 fn attached_protocol_bootstraps_resume_and_flushes_queued_messages() {
     let mut protocol =
         CodexSessionProtocol::new_attached("/tmp/workspace".into(), "thread-1".into());
@@ -483,6 +524,38 @@ fn protocol_maps_goal_text_to_real_thread_goal_set_request() {
     assert_eq!(event.event_type, "assistant.message");
     assert!(event.payload_json.contains("Goal set"));
     assert!(event.payload_json.contains("Finish command support"));
+}
+
+#[test]
+fn protocol_maps_new_slash_command_to_fresh_thread_start_request() {
+    let mut protocol = ready_protocol();
+
+    let outgoing = protocol
+        .enqueue_user_message(UserMessage {
+            text: "/new".into(),
+            image_paths: Vec::new(),
+        })
+        .unwrap();
+
+    assert_eq!(outgoing.len(), 1);
+    assert_eq!(outgoing[0]["method"], "thread/start");
+    assert_eq!(outgoing[0]["params"]["cwd"], "/tmp/workspace");
+    assert!(outgoing[0]["params"].get("threadId").is_none());
+
+    let response = format!(
+        r#"{{"jsonrpc":"2.0","id":{},"result":{{"thread":{{"id":"thread-2"}}}}}}"#,
+        serde_json::to_string(outgoing[0]["id"].as_str().unwrap()).unwrap()
+    );
+    let result = protocol.handle_server_line(&response).unwrap();
+
+    assert_eq!(result.runtime_session_id.as_deref(), Some("thread-2"));
+    assert_eq!(result.session_status.as_deref(), Some("running"));
+    assert_eq!(result.runtime_health.as_deref(), Some("online"));
+    assert!(result.completed_user_message);
+
+    let event = result.event.unwrap();
+    assert_eq!(event.event_type, "assistant.message");
+    assert!(event.payload_json.contains("Started a new agent session"));
 }
 
 #[test]

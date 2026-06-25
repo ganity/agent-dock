@@ -429,6 +429,11 @@ function readStatusFromPayload(payload: Record<string, unknown>): string {
     return errorMessage;
   }
 
+  const turnStatus = readStatus(turn.status);
+  if (turnStatus) {
+    return turnStatus;
+  }
+
   const status = asObject(payload.status);
   const statusMessage = readString(status.message)?.trim();
   if (statusMessage) {
@@ -451,11 +456,19 @@ function optionalNumber<K extends string>(key: K, value: unknown): Record<K, num
 }
 
 function readStatus(value: unknown): string {
-  if (typeof value === "string") return value;
+  if (typeof value === "string") return normalizeStatus(value);
 
   if (typeof value === "object" && value !== null && "type" in value) {
-    return String((value as Record<string, unknown>).type);
+    return normalizeStatus(String((value as Record<string, unknown>).type));
   }
 
   return String(value ?? "");
+}
+
+function normalizeStatus(value: string): string {
+  const normalized = value.trim();
+  if (normalized === "completed") {
+    return "suspended";
+  }
+  return normalized;
 }

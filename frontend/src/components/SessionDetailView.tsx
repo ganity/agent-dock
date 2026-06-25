@@ -30,6 +30,7 @@ export function SessionDetailView(props: {
   const lastEventCountRef = useRef(0);
   const prependAnchorRef = useRef<{ scrollHeight: number; scrollTop: number } | null>(null);
   const wasNearBottomRef = useRef(true);
+  const autoLoadSignatureRef = useRef<string | null>(null);
 
   const items = projectTimelineEvents(props.session.events ?? []);
   const displayTitle = getSessionTitle(props.session);
@@ -44,6 +45,7 @@ export function SessionDetailView(props: {
     if (lastSessionIdRef.current !== props.session.id) {
       lastSessionIdRef.current = props.session.id;
       lastEventCountRef.current = props.session.events.length;
+      autoLoadSignatureRef.current = null;
       shouldStickToBottomRef.current = true;
       transcript.scrollTop = transcript.scrollHeight;
       return;
@@ -71,6 +73,35 @@ export function SessionDetailView(props: {
     transcript.scrollTop = nextScrollTop;
     prependAnchorRef.current = null;
   }, [props.session.events]);
+
+  useLayoutEffect(() => {
+    const transcript = transcriptRef.current;
+    if (
+      !transcript ||
+      !props.session.hasMoreHistory ||
+      props.loadingHistory ||
+      lastSessionIdRef.current !== props.session.id
+    ) {
+      return;
+    }
+
+    const signature = `${props.session.id}:${props.session.events[0]?.id ?? 0}:${props.session.events.length}`;
+    if (
+      transcript.scrollHeight > 0 &&
+      transcript.clientHeight > 0 &&
+      transcript.scrollHeight <= transcript.clientHeight
+    ) {
+      if (autoLoadSignatureRef.current === signature) {
+        return;
+      }
+      autoLoadSignatureRef.current = signature;
+      prependAnchorRef.current = {
+        scrollHeight: transcript.scrollHeight,
+        scrollTop: transcript.scrollTop,
+      };
+      props.onLoadOlder();
+    }
+  }, [props.loadingHistory, props.onLoadOlder, props.session.events, props.session.hasMoreHistory, props.session.id]);
 
   function isNearBottom(element: HTMLElement): boolean {
     return element.scrollHeight - element.scrollTop - element.clientHeight <= 48;

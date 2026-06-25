@@ -14,6 +14,7 @@ export function SessionListView(props: {
   onCreate: () => void;
   onAttach: () => void;
   onSelect: (sessionId: string) => void;
+  onBrowseFiles?: (sessionId: string) => void;
   onDelete: (sessionId: string) => void;
   deletingSessionId?: string | null;
 }) {
@@ -236,6 +237,20 @@ export function SessionListView(props: {
                       </svg>
                     </summary>
                     <div className="session-card-menu-panel">
+                      {props.onBrowseFiles ? (
+                        <button
+                          aria-label={`Browse files for ${title}`}
+                          className="session-card-menu-item"
+                          disabled={props.deletingSessionId === session.id}
+                          type="button"
+                          onClick={() => {
+                            setMenuSessionId(null);
+                            props.onBrowseFiles?.(session.id);
+                          }}
+                        >
+                          Files
+                        </button>
+                      ) : null}
                       <button
                         aria-label={`Delete ${title}`}
                         className="session-card-menu-item"

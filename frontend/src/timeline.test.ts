@@ -344,6 +344,28 @@ describe("projectTimelineEvents", () => {
     ]);
   });
 
+  it("projects completed turn status payloads as suspended session status", () => {
+    const events: SessionEvent[] = [
+      {
+        id: 1,
+        eventType: "session.status.changed",
+        payload: {
+          turn: {
+            status: "completed",
+          },
+        },
+      },
+    ];
+
+    expect(projectTimelineEvents(events)).toEqual([
+      {
+        id: "status:1",
+        kind: "status_summary",
+        statuses: ["suspended"],
+      },
+    ]);
+  });
+
   it("projects failed status messages when turn error details are missing", () => {
     const events: SessionEvent[] = [
       {

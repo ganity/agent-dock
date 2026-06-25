@@ -50,6 +50,29 @@ export interface WorkspaceDirectoryListing {
   directories: WorkspaceDirectory[];
 }
 
+export type WorkspaceEntryKind = "directory" | "file";
+
+export interface WorkspaceEntry {
+  name: string;
+  path: string;
+  kind: WorkspaceEntryKind;
+}
+
+export interface WorkspaceEntryListing {
+  currentPath: string;
+  parentPath?: string | null;
+  entries: WorkspaceEntry[];
+}
+
+export type WorkspaceFileRenderMode = "markdown" | "text";
+
+export interface WorkspaceFile {
+  name: string;
+  path: string;
+  content: string;
+  renderMode: WorkspaceFileRenderMode;
+}
+
 export interface CreateSessionInput {
   rootId: string;
   path: string;

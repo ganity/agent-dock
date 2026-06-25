@@ -11,6 +11,7 @@ import '../../shared/external_links/external_link_opener.dart';
 import '../../shared/media/image_attachment_picker.dart';
 import '../../shared/media/share_attachments.dart';
 import '../../shared/delayed_inline_spinner.dart';
+import '../../shared/markdown_preview.dart';
 import '../../shared/storage/session_composer_draft_store.dart';
 import '../../shared/storage/session_detail_cache_store.dart';
 import '../../shared/storage/session_outbox_store.dart';
@@ -1238,6 +1239,7 @@ class _SessionRow extends StatelessWidget {
         session: session,
         onOpenDetails: () => _showSessionDetailsSheet(context),
         onOpenSession: () => _openSession(context),
+        onOpenFiles: () => _openSessionFiles(context),
         onCopyWorkspacePath: () =>
             _copyToClipboard(context, session.workspacePath, 'Workspace path'),
         onCopyRuntimeSessionId:
@@ -1259,6 +1261,15 @@ class _SessionRow extends StatelessWidget {
           }
           return errorMessage;
         },
+      ),
+    );
+  }
+
+  Future<void> _openSessionFiles(BuildContext context) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) =>
+            _SessionFilesPage(api: api, token: token, session: session),
       ),
     );
   }
@@ -1394,6 +1405,202 @@ String _formatSessionWorkspacePath(String workspacePath) {
   final leading = segments.take(2).join('/');
   final trailing = segments.skip(segments.length - 2).join('/');
   return '${hasLeadingSlash ? '/' : ''}$leading/.../$trailing';
+}
+
+class _SessionFilesPage extends StatefulWidget {
+  const _SessionFilesPage({
+    required this.api,
+    required this.token,
+    required this.session,
+  });
+
+  final DaemonApi api;
+  final String token;
+  final SessionSummary session;
+
+  @override
+  State<_SessionFilesPage> createState() => _SessionFilesPageState();
+}
+
+class _SessionFilesPageState extends State<_SessionFilesPage> {
+  WorkspaceEntryListing? _listing;
+  WorkspaceFile? _selectedFile;
+  String? _errorText;
+  bool _isLoading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_openDirectory('.'));
+  }
+
+  Future<void> _openDirectory(String path) async {
+    setState(() {
+      _isLoading = true;
+      _errorText = null;
+      _selectedFile = null;
+    });
+    try {
+      final listing = await widget.api.sessionWorkspaceEntries(
+        sessionId: widget.session.id,
+        token: widget.token,
+        path: path,
+      );
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _listing = listing;
+      });
+    } on Object catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _errorText = _userFacingSheetErrorText(
+          error,
+          fallbackText: 'Could not load files',
+        );
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _openFile(String path) async {
+    setState(() {
+      _isLoading = true;
+      _errorText = null;
+    });
+    try {
+      final file = await widget.api.sessionWorkspaceFile(
+        sessionId: widget.session.id,
+        token: widget.token,
+        path: path,
+      );
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _selectedFile = file;
+      });
+    } on Object catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _errorText = _userFacingSheetErrorText(
+          error,
+          fallbackText: 'Could not load file',
+        );
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final listing = _listing;
+    final selectedFile = _selectedFile;
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('${_sessionDisplayTitle(widget.session)} files'),
+      ),
+      body: SafeArea(
+        child: ListView(
+          padding: const EdgeInsets.all(18),
+          children: [
+            if (_isLoading) const LinearProgressIndicator(),
+            if (_errorText case final errorText?) ...[
+              const SizedBox(height: 12),
+              Text(
+                errorText,
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
+            ],
+            const SizedBox(height: 12),
+            Text(
+              listing?.currentPath ?? '.',
+              style: Theme.of(context).textTheme.labelLarge,
+            ),
+            if (listing?.parentPath case final parentPath?) ...[
+              const SizedBox(height: 8),
+              ListTile(
+                leading: const Icon(Icons.arrow_upward_rounded),
+                title: const Text('..'),
+                onTap: () => _openDirectory(parentPath),
+              ),
+            ],
+            if (listing != null)
+              for (final entry in listing.entries)
+                ListTile(
+                  leading: Icon(
+                    entry.kind == WorkspaceEntryKind.directory
+                        ? Icons.folder_outlined
+                        : Icons.description_outlined,
+                  ),
+                  title: Text(entry.name),
+                  subtitle: Text(entry.kind.name),
+                  onTap: () {
+                    if (entry.kind == WorkspaceEntryKind.directory) {
+                      unawaited(_openDirectory(entry.path));
+                    } else {
+                      unawaited(_openFile(entry.path));
+                    }
+                  },
+                ),
+            const SizedBox(height: 18),
+            if (selectedFile != null)
+              _WorkspaceFilePreview(file: selectedFile)
+            else
+              const Text('Choose a text or Markdown file to preview it here.'),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _WorkspaceFilePreview extends StatelessWidget {
+  const _WorkspaceFilePreview({required this.file});
+
+  final WorkspaceFile file;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(file.name, style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 4),
+            Text(
+              file.renderMode == WorkspaceFileRenderMode.markdown
+                  ? 'Markdown preview'
+                  : 'Text preview',
+              style: Theme.of(context).textTheme.labelMedium,
+            ),
+            const SizedBox(height: 14),
+            if (file.renderMode == WorkspaceFileRenderMode.markdown)
+              MarkdownPreview(text: file.content)
+            else
+              SelectableText(file.content),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 WorkspaceRoot? _matchingRootForWorkspacePath(
@@ -2897,6 +3104,7 @@ class _SessionActionsSheet extends StatefulWidget {
     required this.session,
     required this.onOpenDetails,
     required this.onOpenSession,
+    required this.onOpenFiles,
     required this.onCopyWorkspacePath,
     required this.onDeleteSession,
     required this.onCopyRuntimeSessionId,
@@ -2905,6 +3113,7 @@ class _SessionActionsSheet extends StatefulWidget {
   final SessionSummary session;
   final Future<void> Function() onOpenDetails;
   final Future<void> Function() onOpenSession;
+  final Future<void> Function() onOpenFiles;
   final Future<void> Function() onCopyWorkspacePath;
   final Future<String?> Function() onDeleteSession;
   final Future<void> Function()? onCopyRuntimeSessionId;
@@ -2948,6 +3157,16 @@ class _SessionActionsSheetState extends State<_SessionActionsSheet> {
                 : () async {
                     Navigator.of(context).pop();
                     await widget.onOpenDetails();
+                  },
+          ),
+          ListTile(
+            leading: const Icon(Icons.folder_open_rounded),
+            title: const Text('Files'),
+            onTap: _isDeleting
+                ? null
+                : () async {
+                    Navigator.of(context).pop();
+                    await widget.onOpenFiles();
                   },
           ),
           if (widget.onCopyRuntimeSessionId case final onCopyRuntimeSessionId?)

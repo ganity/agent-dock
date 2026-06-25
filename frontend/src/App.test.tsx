@@ -480,6 +480,59 @@ describe("App", () => {
     });
   });
 
+  it("keeps one live socket connection while normal events append to the open session", async () => {
+    vi.mocked(listSessions).mockResolvedValueOnce([
+      {
+        id: "sess-1",
+        title: "Launch Pad",
+        agentKind: "codex",
+        sourceKind: "managed",
+        workspacePath: "apps/api",
+        status: "running",
+      },
+    ]);
+    vi.mocked(fetchSessionSnapshot).mockResolvedValueOnce({
+      id: "sess-1",
+      title: "Launch Pad",
+      agentKind: "codex",
+      sourceKind: "managed",
+      runtimeHealth: "online",
+      runtimeErrorMessage: null,
+      workspacePath: "apps/api",
+      status: "running",
+      hasMoreHistory: false,
+      events: [{ id: 7, eventType: "assistant.message", payload: { text: "initial" } }],
+    });
+
+    render(<App />);
+
+    fireEvent.change(await screen.findByLabelText("Username"), { target: { value: "admin" } });
+    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "1234" } });
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+    await waitFor(() => {
+      expect(listSessions).toHaveBeenCalledTimes(1);
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Open Launch Pad" }));
+    expect(await screen.findByRole("button", { name: "Session details" })).toBeInTheDocument();
+    expect(connectSessionEvents).toHaveBeenCalledTimes(1);
+    expect(connectSessionEvents).toHaveBeenCalledWith("sess-1", 7);
+
+    liveSocket.onmessage?.({
+      data: JSON.stringify({
+        id: 8,
+        eventType: "assistant.message",
+        payload: { text: "live append" },
+      }),
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("initiallive append")).toBeInTheDocument();
+    });
+    expect(connectSessionEvents).toHaveBeenCalledTimes(1);
+  });
+
   it("shows live session.error events without replacing a running status pill", async () => {
     vi.mocked(listSessions).mockResolvedValueOnce([
       {
@@ -562,6 +615,56 @@ describe("App", () => {
     expect(fetchSessionSnapshot).not.toHaveBeenCalledWith("sess-1", { limit: 50 });
     expect(await screen.findByRole("button", { name: "Session details" })).toBeInTheDocument();
     expect(connectSessionEvents).toHaveBeenCalledWith("sess-1", 7);
+  });
+
+  it("maps turn completed status payloads to suspended in the session pill", async () => {
+    vi.mocked(listSessions).mockResolvedValueOnce([
+      {
+        id: "sess-1",
+        title: "Launch Pad",
+        agentKind: "codex",
+        sourceKind: "managed",
+        workspacePath: "apps/api",
+        runtimeSessionId: "thread-1",
+        status: "idle",
+      },
+    ]);
+    vi.mocked(fetchSessionSnapshot).mockResolvedValueOnce({
+      id: "sess-1",
+      title: "Launch Pad",
+      agentKind: "codex",
+      sourceKind: "managed",
+      workspacePath: "apps/api",
+      runtimeSessionId: "thread-1",
+      status: "idle",
+      hasMoreHistory: false,
+      events: [],
+    });
+
+    render(<App />);
+
+    fireEvent.change(await screen.findByLabelText("Username"), { target: { value: "admin" } });
+    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "1234" } });
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+    await waitFor(() => {
+      expect(listSessions).toHaveBeenCalledTimes(1);
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Open Launch Pad" }));
+    expect(await screen.findByRole("button", { name: "Session details" })).toBeInTheDocument();
+
+    liveSocket.onmessage?.({
+      data: JSON.stringify({
+        id: 3,
+        eventType: "session.status.changed",
+        payload: { threadId: "thread-1", turn: { status: "completed" } },
+      }),
+    });
+
+    await waitFor(() => {
+      expect(document.querySelector(".session-status-pill")).toHaveTextContent("suspended");
+    });
   });
 
   it("resumes a running codex session with a stored runtime id before opening details", async () => {

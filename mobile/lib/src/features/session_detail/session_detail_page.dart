@@ -1375,10 +1375,10 @@ class _SessionDetailPageState extends State<SessionDetailPage>
         final newMaxScrollExtent =
             _timelineScrollController.position.maxScrollExtent;
         final delta = newMaxScrollExtent - previousMaxScrollExtent;
-        if (delta <= 0) {
-          return;
+        if (delta > 0) {
+          _timelineScrollController.jumpTo(previousOffset + delta);
         }
-        _timelineScrollController.jumpTo(previousOffset + delta);
+        _maybeLoadOlderEventsFromController(allowNonScrollableOnly: true);
       });
     } on Object catch (error) {
       if (await _handleUnauthorizedRequest(error)) {
@@ -3243,10 +3243,20 @@ String? _sessionStatusFromPayload(Map<String, Object?> payload) {
   if (_turnErrorMessage(payload) case final message?) {
     return message;
   }
+  final turn = payload['turn'];
+  if (turn is Map<String, Object?>) {
+    final turnStatus = turn['status'];
+    switch (turnStatus) {
+      case final String value:
+        return _normalizedEventStatus(value);
+      case final Map<String, Object?> value when value['type'] is String:
+        return _normalizedEventStatus(value['type'] as String);
+    }
+  }
   return switch (payload['status']) {
-    final String value => _normalizedStatus(value),
+    final String value => _normalizedEventStatus(value),
     final Map<String, Object?> value when value['type'] is String =>
-      _normalizedStatus(value['type'] as String),
+      _normalizedEventStatus(value['type'] as String),
     _ => null,
   };
 }
@@ -3270,6 +3280,13 @@ String? _normalizedStatus(String? value) {
     return null;
   }
   return normalized;
+}
+
+String? _normalizedEventStatus(String? value) {
+  return switch (_normalizedStatus(value)) {
+    'completed' => 'suspended',
+    final normalized => normalized,
+  };
 }
 
 bool _sessionAllowsActiveIndicators(String? status) {

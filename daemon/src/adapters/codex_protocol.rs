@@ -235,6 +235,30 @@ impl CodexSessionProtocol {
             let runtime_error_message = response.error_message.as_deref();
             self.current_turn_id = None;
             self.in_flight_user_message = false;
+            let mut runtime_session_id = None;
+            let mut session_status = None;
+            let mut runtime_health =
+                runtime_error_message.map(|_| "recoverable_error".to_string());
+            let mut runtime_error_kind = runtime_error_message
+                .map(|message| Some(classify_response_error_kind(message).to_string()));
+            let mut next_runtime_error_message =
+                runtime_error_message.map(|message| Some(message.to_string()));
+
+            if runtime_error_message.is_none() && matches!(command, PendingCommand::NewThread) {
+                let thread_id = response
+                    .result
+                    .get("thread")
+                    .and_then(|thread| thread.get("id"))
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| anyhow::anyhow!("thread/start response missing thread.id"))?
+                    .to_string();
+                self.thread_id = Some(thread_id.clone());
+                runtime_session_id = Some(thread_id);
+                session_status = Some("running".to_string());
+                runtime_health = Some("online".to_string());
+                runtime_error_kind = Some(None);
+                next_runtime_error_message = Some(None);
+            }
             let can_accept_user_message = self.can_accept_user_message();
             return Ok(CodexLineResult {
                 outgoing: Vec::new(),
@@ -243,13 +267,11 @@ impl CodexSessionProtocol {
                     &response.result,
                     runtime_error_message,
                 )),
-                runtime_session_id: None,
-                session_status: None,
-                runtime_health: runtime_error_message.map(|_| "recoverable_error".to_string()),
-                runtime_error_kind: runtime_error_message
-                    .map(|message| Some(classify_response_error_kind(message).to_string())),
-                runtime_error_message: runtime_error_message
-                    .map(|message| Some(message.to_string())),
+                runtime_session_id,
+                session_status,
+                runtime_health,
+                runtime_error_kind,
+                runtime_error_message: next_runtime_error_message,
                 can_accept_user_message,
                 completed_user_message: true,
             });
@@ -286,7 +308,12 @@ impl CodexSessionProtocol {
             .insert(request_id.clone(), command.clone());
         self.in_flight_user_message = true;
 
-        vec![build_command_request(&request_id, &thread_id, &command)]
+        vec![build_command_request(
+            &request_id,
+            &thread_id,
+            &self.cwd,
+            &command,
+        )]
     }
 
     fn next_turn_start_request(&mut self, thread_id: String, message: UserMessage) -> Value {
@@ -335,7 +362,10 @@ impl CodexSessionProtocol {
     }
 
     fn maybe_bind_current_turn_id(&mut self, envelope: &RpcNotificationEnvelope) {
-        if !self.in_flight_user_message || self.current_turn_id.is_some() {
+        let is_explicit_turn_start = envelope.method.as_deref() == Some("turn/started");
+        if !self.in_flight_user_message
+            || (self.current_turn_id.is_some() && !is_explicit_turn_start)
+        {
             return;
         }
         let Some(params) = envelope.params.as_ref() else {
@@ -376,6 +406,7 @@ impl CodexSessionProtocol {
 
 #[derive(Clone, Debug)]
 enum PendingCommand {
+    NewThread,
     Compact,
     GoalGet,
     GoalSet { objective: String },
@@ -385,6 +416,7 @@ enum PendingCommand {
 impl PendingCommand {
     fn request_id_label(&self) -> &'static str {
         match self {
+            Self::NewThread => "thread-new",
             Self::Compact => "thread-compact",
             Self::GoalGet => "thread-goal-get",
             Self::GoalSet { .. } => "thread-goal-set",
@@ -395,6 +427,10 @@ impl PendingCommand {
 
 fn parse_slash_command(text: &str) -> Option<PendingCommand> {
     let trimmed = text.trim();
+    if trimmed == "/new" {
+        return Some(PendingCommand::NewThread);
+    }
+
     if trimmed == "/compact" {
         return Some(PendingCommand::Compact);
     }
@@ -419,8 +455,14 @@ fn parse_slash_command(text: &str) -> Option<PendingCommand> {
     })
 }
 
-fn build_command_request(request_id: &str, thread_id: &str, command: &PendingCommand) -> Value {
+fn build_command_request(
+    request_id: &str,
+    thread_id: &str,
+    cwd: &str,
+    command: &PendingCommand,
+) -> Value {
     match command {
+        PendingCommand::NewThread => build_thread_start_request(request_id, cwd),
         PendingCommand::Compact => build_thread_compact_start_request(request_id, thread_id),
         PendingCommand::GoalGet => build_thread_goal_get_request(request_id, thread_id),
         PendingCommand::GoalSet { objective } => {
@@ -557,6 +599,7 @@ fn command_response_event(
         format!("Command failed: {message}")
     } else {
         match command {
+            PendingCommand::NewThread => "Started a new agent session.".to_string(),
             PendingCommand::Compact => "Compaction started.".to_string(),
             PendingCommand::GoalGet => match result.get("goal") {
                 Some(Value::Null) | None => "No active goal.".to_string(),

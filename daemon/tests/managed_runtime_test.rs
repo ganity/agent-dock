@@ -525,6 +525,61 @@ async fn managed_codex_session_sends_goal_slash_command_as_thread_goal_set_reque
 }
 
 #[tokio::test]
+async fn managed_codex_session_sends_new_slash_command_as_fresh_thread_start() {
+    let dir = tempdir().unwrap();
+    let captured_path = dir.path().join("new-request.jsonl");
+    let captured_path_for_spawner = captured_path.clone();
+    let store = SqliteSessionStore::in_memory().await.unwrap();
+    let spawner = Arc::new(move |_command: LaunchCommand| {
+        spawn_command(LaunchCommand {
+            program: "sh".into(),
+            args: vec![
+                "-lc".into(),
+                "IFS= read -r _init; printf '%s\n' '{\"jsonrpc\":\"2.0\",\"id\":\"agent-dock-initialize-1\",\"result\":{}}'; \
+                 IFS= read -r _thread; printf '%s\n' '{\"jsonrpc\":\"2.0\",\"id\":\"agent-dock-thread-start-2\",\"result\":{\"thread\":{\"id\":\"thread-1\"}}}'; \
+                 IFS= read -r command_request; printf '%s\n' \"$command_request\" > \"$1\"; \
+                 command_id=$(printf '%s' \"$command_request\" | sed -n 's/.*\"id\":\"\\([^\"]*\\)\".*/\\1/p'); \
+                 printf '{\"jsonrpc\":\"2.0\",\"id\":\"%s\",\"result\":{\"thread\":{\"id\":\"thread-2\"}}}\n' \"$command_id\"".into(),
+                "agent-dock-test".into(),
+                captured_path_for_spawner.to_string_lossy().into_owned(),
+            ],
+        })
+    });
+
+    let service = SessionService::new_with_spawner(store, spawner);
+    let session_id = service
+        .create_managed_session("workspace".into(), "repo".into(), "codex".into(), None)
+        .await
+        .unwrap();
+
+    service
+        .send_user_message(&session_id, "/new".into())
+        .await
+        .unwrap();
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let captured = tokio::fs::read_to_string(captured_path).await.unwrap();
+    assert!(captured.contains(r#""method":"thread/start""#));
+    assert!(captured.contains(r#""cwd":"repo""#));
+    assert!(!captured.contains(r#""method":"turn/start""#));
+    assert!(!captured.contains(r#""threadId":"thread-1""#));
+
+    let snapshot = service.load_snapshot(&session_id).await.unwrap();
+    assert_eq!(
+        snapshot.session.runtime_session_id.as_deref(),
+        Some("thread-2")
+    );
+    assert!(
+        snapshot
+            .events
+            .iter()
+            .any(|event| event.event_type == "assistant.message"
+                && event.payload_json.contains("Started a new agent session"))
+    );
+}
+
+#[tokio::test]
 async fn managed_codex_session_recovers_after_service_restart_and_resumes_thread() {
     let dir = tempdir().unwrap();
     let db_path = dir.path().join("agent-dock.sqlite3");
@@ -811,6 +866,86 @@ async fn managed_codex_session_sends_only_one_pending_message_until_turn_complet
     .expect("second pending message should be sent after turn completion");
 
     let second = tokio::fs::read_to_string(&second_path).await.unwrap();
+    assert!(second.contains("second queued"));
+}
+
+#[tokio::test]
+async fn managed_codex_session_rebinds_turn_after_resume_replay_and_drains_pending_messages() {
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("agent-dock.sqlite3");
+    let first_path = dir.path().join("first-turn.jsonl");
+    let second_path = dir.path().join("second-turn.jsonl");
+    let first_path_for_spawner = first_path.clone();
+    let second_path_for_spawner = second_path.clone();
+    let spawner = Arc::new(move |_command: LaunchCommand| {
+        spawn_command(LaunchCommand {
+            program: "bash".into(),
+            args: vec![
+                "-lc".into(),
+                "IFS= read -r _init; printf '%s\n' '{\"jsonrpc\":\"2.0\",\"id\":\"agent-dock-initialize-1\",\"result\":{}}'; \
+                 IFS= read -r _resume; printf '%s\n' '{\"jsonrpc\":\"2.0\",\"id\":\"agent-dock-thread-resume-2\",\"result\":{\"thread\":{\"id\":\"thread-1\"}}}'; \
+                 IFS= read -r first_turn; printf '%s\n' \"$first_turn\" > \"$1\"; \
+                 printf '%s\n' '{\"jsonrpc\":\"2.0\",\"method\":\"turn/started\",\"params\":{\"threadId\":\"thread-1\",\"turn\":{\"id\":\"turn-stale\"}}}'; \
+                 printf '%s\n' '{\"jsonrpc\":\"2.0\",\"method\":\"turn/started\",\"params\":{\"threadId\":\"thread-1\",\"turn\":{\"id\":\"turn-current\"}}}'; \
+                 printf '%s\n' '{\"jsonrpc\":\"2.0\",\"method\":\"turn/completed\",\"params\":{\"turnId\":\"turn-current\",\"threadId\":\"thread-1\",\"status\":{\"type\":\"completed\"}}}'; \
+                 IFS= read -r second_turn; printf '%s\n' \"$second_turn\" > \"$2\"; \
+                 sleep 1".into(),
+                "agent-dock-test".into(),
+                first_path_for_spawner.to_string_lossy().into_owned(),
+                second_path_for_spawner.to_string_lossy().into_owned(),
+            ],
+        })
+    });
+
+    let seed_store = SqliteSessionStore::from_path(&db_path).await.unwrap();
+    let session_id = seed_store
+        .create_session(
+            "usr_workspace".into(),
+            "workspace".into(),
+            "repo".into(),
+            "attached".into(),
+            "codex".into(),
+            None,
+        )
+        .await
+        .unwrap();
+    seed_store
+        .update_runtime_session_id(&session_id, "thread-1")
+        .await
+        .unwrap();
+    seed_store
+        .append_user_message_and_enqueue_pending(&session_id, None, "first queued".into(), &[])
+        .await
+        .unwrap();
+    seed_store
+        .append_user_message_and_enqueue_pending(&session_id, None, "second queued".into(), &[])
+        .await
+        .unwrap();
+    drop(seed_store);
+
+    let store = SqliteSessionStore::from_path(&db_path).await.unwrap();
+    let service = SessionService::new_with_spawner(store, spawner);
+    service.resume_session(&session_id).await.unwrap();
+
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while !first_path.exists() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("runtime should receive the first pending message");
+
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while !second_path.exists() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("second pending message should drain after the current turn completes");
+
+    let first = tokio::fs::read_to_string(&first_path).await.unwrap();
+    let second = tokio::fs::read_to_string(&second_path).await.unwrap();
+    assert!(first.contains("first queued"));
     assert!(second.contains("second queued"));
 }
 

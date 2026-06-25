@@ -2,7 +2,10 @@ use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode};
 use tower::ServiceExt;
 
-use agent_dock_daemon::app::build_test_router;
+use agent_dock_daemon::{
+    app::{build_test_router, build_test_router_with_config},
+    config::{AppConfig, WorkspaceRoot},
+};
 
 #[tokio::test]
 async fn get_session_detail_returns_snapshot_events() {
@@ -160,6 +163,104 @@ async fn get_session_detail_supports_latest_window_and_before_cursor() {
     assert!(older_events[2]["id"].as_i64().unwrap() < latest_events[0]["id"].as_i64().unwrap());
 }
 
+#[tokio::test]
+async fn session_workspace_file_api_lists_and_reads_markdown_files_inside_workspace() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("workspace");
+    let repo = root.join("repo");
+    let docs = repo.join("docs");
+    std::fs::create_dir_all(&docs).unwrap();
+    std::fs::write(
+        docs.join("design.md"),
+        "# Design\n\n- preview this markdown\n",
+    )
+    .unwrap();
+    std::fs::write(repo.join("README.txt"), "plain text").unwrap();
+    std::fs::write(temp.path().join("secret.md"), "# Secret").unwrap();
+
+    let app = build_test_router_with_config(AppConfig {
+        roots: vec![WorkspaceRoot {
+            id: "workspace".into(),
+            label: "Workspace".into(),
+            path: root.to_string_lossy().into_owned(),
+        }],
+        ..AppConfig::for_tests()
+    })
+    .await;
+
+    let cookie = login_for_cookie(&app, "admin").await;
+    let session_id = create_claude_session(&app, &cookie, "repo").await;
+
+    let entries = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/sessions/{session_id}/workspace/entries?path=docs"
+                ))
+                .header("cookie", cookie.clone())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(entries.status(), StatusCode::OK);
+    let entries_body = to_bytes(entries.into_body(), usize::MAX).await.unwrap();
+    let entries_json: serde_json::Value = serde_json::from_slice(&entries_body).unwrap();
+    assert_eq!(entries_json["currentPath"].as_str(), Some("docs"));
+    assert_eq!(entries_json["parentPath"].as_str(), Some("."));
+    assert_eq!(
+        entries_json["entries"][0]["name"].as_str(),
+        Some("design.md")
+    );
+    assert_eq!(entries_json["entries"][0]["kind"].as_str(), Some("file"));
+    assert_eq!(
+        entries_json["entries"][0]["path"].as_str(),
+        Some("docs/design.md")
+    );
+
+    let file = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/sessions/{session_id}/workspace/file?path=docs/design.md"
+                ))
+                .header("cookie", cookie.clone())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(file.status(), StatusCode::OK);
+    let file_body = to_bytes(file.into_body(), usize::MAX).await.unwrap();
+    let file_json: serde_json::Value = serde_json::from_slice(&file_body).unwrap();
+    assert_eq!(file_json["path"].as_str(), Some("docs/design.md"));
+    assert_eq!(file_json["name"].as_str(), Some("design.md"));
+    assert_eq!(file_json["renderMode"].as_str(), Some("markdown"));
+    assert_eq!(
+        file_json["content"].as_str(),
+        Some("# Design\n\n- preview this markdown\n"),
+    );
+
+    let escaped = app
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/sessions/{session_id}/workspace/file?path=../secret.md"
+                ))
+                .header("cookie", cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(escaped.status(), StatusCode::FORBIDDEN);
+}
+
 async fn login_for_cookie(app: &axum::Router, username: &str) -> String {
     let login = app
         .clone()
@@ -184,4 +285,27 @@ async fn login_for_cookie(app: &axum::Router, username: &str) -> String {
         .to_str()
         .unwrap()
         .to_string()
+}
+
+async fn create_claude_session(app: &axum::Router, cookie: &str, path: &str) -> String {
+    let create = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/sessions")
+                .header("content-type", "application/json")
+                .header("cookie", cookie)
+                .body(Body::from(format!(
+                    r#"{{"rootId":"workspace","path":"{path}","agentKind":"claude"}}"#,
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(create.status(), StatusCode::OK);
+    let create_body = to_bytes(create.into_body(), usize::MAX).await.unwrap();
+    let create_json: serde_json::Value = serde_json::from_slice(&create_body).unwrap();
+    create_json["id"].as_str().unwrap().to_string()
 }

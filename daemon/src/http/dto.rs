@@ -102,6 +102,31 @@ pub struct WorkspaceDirectoryListingDto {
 }
 
 #[derive(Serialize)]
+pub struct WorkspaceEntryDto {
+    pub name: String,
+    pub path: String,
+    pub kind: String,
+}
+
+#[derive(Serialize)]
+pub struct WorkspaceEntryListingDto {
+    #[serde(rename = "currentPath")]
+    pub current_path: String,
+    #[serde(rename = "parentPath")]
+    pub parent_path: Option<String>,
+    pub entries: Vec<WorkspaceEntryDto>,
+}
+
+#[derive(Serialize)]
+pub struct WorkspaceFileDto {
+    pub name: String,
+    pub path: String,
+    pub content: String,
+    #[serde(rename = "renderMode")]
+    pub render_mode: String,
+}
+
+#[derive(Serialize)]
 pub struct SessionEventDto {
     pub id: i64,
     #[serde(rename = "eventType")]

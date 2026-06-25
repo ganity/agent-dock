@@ -15,7 +15,8 @@ use crate::{
         AdminUserDto, AttachSessionRequest, CreateSessionRequest, CreateUserRequest,
         CurrentUserDto, LoginRequest, ResetUserPasswordRequest, ResumeCandidateDto,
         SendMessageAckDto, SendMessageRequest, SessionEventDto, SessionSnapshotDto,
-        SessionSummaryDto, WorkspaceDirectoryDto, WorkspaceDirectoryListingDto, WorkspaceRootDto,
+        SessionSummaryDto, WorkspaceDirectoryDto, WorkspaceDirectoryListingDto, WorkspaceEntryDto,
+        WorkspaceEntryListingDto, WorkspaceFileDto, WorkspaceRootDto,
     },
     http::ws::{stream_session_events, stream_voice_input},
     workspace,
@@ -43,6 +44,14 @@ pub fn routes() -> Router<AppState> {
             get(get_session).delete(delete_session),
         )
         .route("/api/sessions/{id}/resume", post(resume_session))
+        .route(
+            "/api/sessions/{id}/workspace/entries",
+            get(list_session_workspace_entries),
+        )
+        .route(
+            "/api/sessions/{id}/workspace/file",
+            get(get_session_workspace_file),
+        )
         .route(
             "/api/sessions/{id}/attachments/{name}",
             get(get_session_attachment),
@@ -725,6 +734,116 @@ async fn resume_session(
     }
 }
 
+async fn list_session_workspace_entries(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(session_id): Path<String>,
+    Query(query): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let Some(user) = current_user_from_headers(&state, &headers) else {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "UNAUTHORIZED" })),
+        )
+            .into_response();
+    };
+
+    if let Err(response) = ensure_session_access(&state, &session_id, &user.id).await {
+        return response;
+    }
+
+    let path = query.get("path").map(String::as_str).unwrap_or(".");
+    let snapshot = match state.sessions.load_snapshot(&session_id).await {
+        Ok(value) => value,
+        Err(_) => return StatusCode::NOT_FOUND.into_response(),
+    };
+    let Some(workspace_path) = session_workspace_filesystem_path(&state, &snapshot.session) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "UNKNOWN_ROOT" })),
+        )
+            .into_response();
+    };
+    let listing = match workspace::list_workspace_entries(&workspace_path, path) {
+        Ok(value) => value,
+        Err(error) => return workspace_file_error_response(error),
+    };
+
+    let response = WorkspaceEntryListingDto {
+        current_path: listing.current_path,
+        parent_path: listing.parent_path,
+        entries: listing
+            .entries
+            .into_iter()
+            .map(|entry| WorkspaceEntryDto {
+                name: entry.name,
+                path: entry.path,
+                kind: match entry.kind {
+                    workspace::WorkspaceEntryKind::Directory => "directory".into(),
+                    workspace::WorkspaceEntryKind::File => "file".into(),
+                },
+            })
+            .collect(),
+    };
+
+    (StatusCode::OK, Json(response)).into_response()
+}
+
+async fn get_session_workspace_file(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(session_id): Path<String>,
+    Query(query): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let Some(user) = current_user_from_headers(&state, &headers) else {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "UNAUTHORIZED" })),
+        )
+            .into_response();
+    };
+
+    if let Err(response) = ensure_session_access(&state, &session_id, &user.id).await {
+        return response;
+    }
+
+    let Some(path) = query.get("path").map(String::as_str) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "path query parameter is required" })),
+        )
+            .into_response();
+    };
+
+    let snapshot = match state.sessions.load_snapshot(&session_id).await {
+        Ok(value) => value,
+        Err(_) => return StatusCode::NOT_FOUND.into_response(),
+    };
+    let Some(workspace_path) = session_workspace_filesystem_path(&state, &snapshot.session) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "UNKNOWN_ROOT" })),
+        )
+            .into_response();
+    };
+    let file = match workspace::read_workspace_text_file(&workspace_path, path) {
+        Ok(value) => value,
+        Err(error) => return workspace_file_error_response(error),
+    };
+
+    let response = WorkspaceFileDto {
+        name: file.name,
+        path: file.path,
+        content: file.content,
+        render_mode: match file.render_mode {
+            workspace::WorkspaceFileRenderMode::Markdown => "markdown".into(),
+            workspace::WorkspaceFileRenderMode::Text => "text".into(),
+        },
+    };
+
+    (StatusCode::OK, Json(response)).into_response()
+}
+
 async fn send_session_message(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -964,6 +1083,42 @@ async fn ensure_session_access(
     }
 }
 
+fn workspace_file_error_response(error: workspace::WorkspaceFileError) -> axum::response::Response {
+    match error {
+        workspace::WorkspaceFileError::Forbidden => {
+            (StatusCode::FORBIDDEN, Json(json!({ "error": "FORBIDDEN" }))).into_response()
+        }
+        workspace::WorkspaceFileError::NotFound => {
+            (StatusCode::NOT_FOUND, Json(json!({ "error": "NOT_FOUND" }))).into_response()
+        }
+        workspace::WorkspaceFileError::TooLarge => (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            Json(json!({ "error": "FILE_TOO_LARGE" })),
+        )
+            .into_response(),
+        workspace::WorkspaceFileError::InvalidUtf8 => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "FILE_NOT_TEXT" })),
+        )
+            .into_response(),
+        workspace::WorkspaceFileError::NotDirectory => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "PATH_NOT_DIRECTORY" })),
+        )
+            .into_response(),
+        workspace::WorkspaceFileError::NotFile => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "PATH_NOT_FILE" })),
+        )
+            .into_response(),
+        workspace::WorkspaceFileError::Io(message) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": message })),
+        )
+            .into_response(),
+    }
+}
+
 fn current_user_to_dto(user: crate::auth::CurrentUser) -> CurrentUserDto {
     CurrentUserDto {
         id: user.id,
@@ -1011,6 +1166,25 @@ fn session_summary_to_dto(session: crate::session::model::SessionSummary) -> Ses
         runtime_error_kind: session.runtime_error_kind,
         runtime_error_message: session.runtime_error_message,
     }
+}
+
+fn session_workspace_filesystem_path(
+    state: &AppState,
+    session: &crate::session::model::SessionRecord,
+) -> Option<String> {
+    if std::path::Path::new(&session.workspace_path).is_absolute() {
+        return Some(session.workspace_path.clone());
+    }
+
+    let root = state
+        .config
+        .roots
+        .iter()
+        .find(|root| root.id == session.root_id)?;
+    Some(normalize_workspace_path(
+        &root.path,
+        &session.workspace_path,
+    ))
 }
 
 fn content_type_for_attachment_name(name: &str) -> &'static str {

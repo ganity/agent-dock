@@ -2356,6 +2356,75 @@ void main() {
     },
   );
 
+  testWidgets(
+    'shows suspended when turn completion payload carries completed status inside turn',
+    (tester) async {
+      final resumedEvents = StreamController<SessionEvent>();
+      final api = FakeDaemonApi(
+        liveEventStreams: [resumedEvents.stream],
+        bootstrap: const MobileBootstrap(
+          daemonVersion: '0.1.0',
+          user: CurrentUser(id: 'usr_workspace', displayName: 'Workspace'),
+          roots: <WorkspaceRoot>[],
+          sessions: [
+            SessionSummary(
+              id: 'sess_1',
+              title: 'Completed turn',
+              agentKind: 'codex',
+              sourceKind: 'managed',
+              runtimeSessionId: 'runtime_1',
+              status: 'idle',
+              workspacePath: '/tmp/workspace',
+            ),
+          ],
+          voice: VoiceConfig(doubaoDirectAvailable: false),
+        ),
+        snapshot: const SessionSnapshot(
+          id: 'sess_1',
+          title: 'Completed turn',
+          agentKind: 'codex',
+          sourceKind: 'managed',
+          runtimeSessionId: 'runtime_1',
+          workspacePath: '/tmp/workspace',
+          status: 'idle',
+          hasMoreHistory: false,
+          events: [],
+        ),
+      );
+
+      await pumpApp(tester, api: api);
+      await tester.enterText(find.byType(TextField).at(0), 'workspace');
+      await tester.enterText(find.byType(TextField).at(1), '1234');
+      await tester.tap(find.text('Sign in'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Completed turn'));
+      await tester.pump();
+
+      resumedEvents.add(
+        const SessionEvent(
+          id: 4,
+          eventType: 'session.status.changed',
+          payload: {
+            'threadId': 'thread-1',
+            'turn': {'status': 'completed'},
+          },
+        ),
+      );
+      await tester.pump();
+
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('session-status-pill')),
+          matching: find.text('suspended'),
+        ),
+        findsOneWidget,
+      );
+
+      await resumedEvents.close();
+    },
+  );
+
   testWidgets('heartbeat timeout forces session event stream reconnect', (
     tester,
   ) async {
@@ -12260,6 +12329,181 @@ void main() {
     },
   );
 
+  testWidgets(
+    'automatically loads older history when the initial timeline is shorter than one viewport',
+    (tester) async {
+      final api = FakeDaemonApi(
+        bootstrap: const MobileBootstrap(
+          daemonVersion: '0.1.0',
+          user: CurrentUser(id: 'usr_workspace', displayName: 'Workspace'),
+          roots: <WorkspaceRoot>[],
+          sessions: [
+            SessionSummary(
+              id: 'sess_1',
+              title: 'Short history',
+              agentKind: 'codex',
+              sourceKind: 'managed',
+              runtimeSessionId: 'runtime_1',
+              status: 'running',
+              workspacePath: '/home/jhz/projects/agent-dock',
+            ),
+          ],
+          voice: VoiceConfig(doubaoDirectAvailable: false),
+        ),
+        snapshot: const SessionSnapshot(
+          id: 'sess_1',
+          title: 'Short history',
+          agentKind: 'codex',
+          sourceKind: 'managed',
+          runtimeSessionId: 'runtime_1',
+          workspacePath: '/home/jhz/projects/agent-dock',
+          status: 'running',
+          hasMoreHistory: true,
+          events: [
+            SessionEvent(
+              id: 20,
+              eventType: 'assistant.message',
+              payload: {'text': 'latest answer'},
+            ),
+          ],
+        ),
+        olderSnapshot: const SessionSnapshot(
+          id: 'sess_1',
+          title: 'Short history',
+          agentKind: 'codex',
+          sourceKind: 'managed',
+          runtimeSessionId: 'runtime_1',
+          workspacePath: '/home/jhz/projects/agent-dock',
+          status: 'running',
+          hasMoreHistory: false,
+          events: [
+            SessionEvent(
+              id: 12,
+              eventType: 'user.message',
+              payload: {'text': 'older 12'},
+            ),
+          ],
+        ),
+      );
+      await pumpApp(tester, api: api);
+
+      await tester.enterText(find.byType(TextField).at(0), 'workspace');
+      await tester.enterText(find.byType(TextField).at(1), '1234');
+      await tester.tap(find.text('Sign in'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Short history'));
+      await tester.pumpAndSettle();
+
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.pumpAndSettle();
+
+      expect(api.snapshotRequests, [
+        'sess_1:tok_workspace:null',
+        'sess_1:tok_workspace:20',
+      ]);
+      expect(find.text('older 12'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'keeps auto-loading older history until the initial timeline can scroll or history ends',
+    (tester) async {
+      final api = FakeDaemonApi(
+        bootstrap: const MobileBootstrap(
+          daemonVersion: '0.1.0',
+          user: CurrentUser(id: 'usr_workspace', displayName: 'Workspace'),
+          roots: <WorkspaceRoot>[],
+          sessions: [
+            SessionSummary(
+              id: 'sess_1',
+              title: 'Very short history',
+              agentKind: 'codex',
+              sourceKind: 'managed',
+              runtimeSessionId: 'runtime_1',
+              status: 'running',
+              workspacePath: '/home/jhz/projects/agent-dock',
+            ),
+          ],
+          voice: VoiceConfig(doubaoDirectAvailable: false),
+        ),
+        snapshot: const SessionSnapshot(
+          id: 'sess_1',
+          title: 'Very short history',
+          agentKind: 'codex',
+          sourceKind: 'managed',
+          runtimeSessionId: 'runtime_1',
+          workspacePath: '/home/jhz/projects/agent-dock',
+          status: 'running',
+          hasMoreHistory: true,
+          events: [
+            SessionEvent(
+              id: 20,
+              eventType: 'assistant.message',
+              payload: {'text': 'latest answer'},
+            ),
+          ],
+        ),
+        olderSnapshots: const [
+          SessionSnapshot(
+            id: 'sess_1',
+            title: 'Very short history',
+            agentKind: 'codex',
+            sourceKind: 'managed',
+            runtimeSessionId: 'runtime_1',
+            workspacePath: '/home/jhz/projects/agent-dock',
+            status: 'running',
+            hasMoreHistory: true,
+            events: [
+              SessionEvent(
+                id: 12,
+                eventType: 'user.message',
+                payload: {'text': 'older 12'},
+              ),
+            ],
+          ),
+          SessionSnapshot(
+            id: 'sess_1',
+            title: 'Very short history',
+            agentKind: 'codex',
+            sourceKind: 'managed',
+            runtimeSessionId: 'runtime_1',
+            workspacePath: '/home/jhz/projects/agent-dock',
+            status: 'running',
+            hasMoreHistory: false,
+            events: [
+              SessionEvent(
+                id: 8,
+                eventType: 'assistant.message',
+                payload: {'text': 'older 8'},
+              ),
+            ],
+          ),
+        ],
+      );
+      await pumpApp(tester, api: api);
+
+      await tester.enterText(find.byType(TextField).at(0), 'workspace');
+      await tester.enterText(find.byType(TextField).at(1), '1234');
+      await tester.tap(find.text('Sign in'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Very short history'));
+      await tester.pumpAndSettle();
+
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.pumpAndSettle();
+
+      expect(api.snapshotRequests, [
+        'sess_1:tok_workspace:null',
+        'sess_1:tok_workspace:20',
+        'sess_1:tok_workspace:12',
+      ]);
+      expect(find.text('older 12'), findsOneWidget);
+      expect(find.text('older 8'), findsOneWidget);
+    },
+  );
+
   testWidgets('routes back to login for 401 older-history requests', (
     tester,
   ) async {
@@ -17598,6 +17842,89 @@ void main() {
     );
   });
 
+  testWidgets('session files browser previews markdown files', (tester) async {
+    final api = FakeDaemonApi(
+      bootstrap: const MobileBootstrap(
+        daemonVersion: '0.1.0',
+        user: CurrentUser(id: 'usr_workspace', displayName: 'Workspace'),
+        roots: [
+          WorkspaceRoot(
+            id: 'workspace',
+            label: 'Workspace',
+            path: '/home/jhz/projects',
+          ),
+        ],
+        sessions: [
+          SessionSummary(
+            id: 'sess_1',
+            title: 'Mobile migration',
+            agentKind: 'codex',
+            sourceKind: 'managed',
+            runtimeSessionId: 'runtime_1',
+            status: 'running',
+            workspacePath: '/home/jhz/projects/agent-dock',
+          ),
+        ],
+        voice: VoiceConfig(doubaoDirectAvailable: false),
+      ),
+      workspaceEntryListings: const {
+        'sess_1:.': WorkspaceEntryListing(
+          currentPath: '.',
+          parentPath: null,
+          entries: [
+            WorkspaceEntry(
+              name: 'docs',
+              path: 'docs',
+              kind: WorkspaceEntryKind.directory,
+            ),
+          ],
+        ),
+        'sess_1:docs': WorkspaceEntryListing(
+          currentPath: 'docs',
+          parentPath: '.',
+          entries: [
+            WorkspaceEntry(
+              name: 'design.md',
+              path: 'docs/design.md',
+              kind: WorkspaceEntryKind.file,
+            ),
+          ],
+        ),
+      },
+      workspaceFiles: const {
+        'sess_1:docs/design.md': WorkspaceFile(
+          name: 'design.md',
+          path: 'docs/design.md',
+          renderMode: WorkspaceFileRenderMode.markdown,
+          content: '# Design Preview\n\n- Render markdown\n',
+        ),
+      },
+    );
+    await pumpApp(tester, api: api);
+
+    await tester.enterText(find.byType(TextField).at(0), 'workspace');
+    await tester.enterText(find.byType(TextField).at(1), '1234');
+    await tester.tap(find.text('Sign in'));
+    await tester.pumpAndSettle();
+
+    await tester.longPress(find.text('Mobile migration'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Files'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('docs'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('design.md'));
+    await tester.pumpAndSettle();
+
+    expect(api.workspaceEntryRequests, ['sess_1:.', 'sess_1:docs']);
+    expect(api.workspaceFileRequests, ['sess_1:docs/design.md']);
+    expect(find.text('Markdown preview'), findsOneWidget);
+    expect(find.text('Design Preview'), findsOneWidget);
+    expect(find.text('Render markdown'), findsOneWidget);
+    expect(find.text('# Design Preview'), findsNothing);
+  });
+
   testWidgets(
     'deleting from the session actions sheet shows an in-sheet deleting state until the request finishes',
     (tester) async {
@@ -18554,6 +18881,7 @@ class FakeDaemonApi implements DaemonApi {
     this.resumeError,
     this.resumeDelay,
     SessionSnapshot? olderSnapshot,
+    List<SessionSnapshot>? olderSnapshots,
     this.olderSnapshotError,
     this.olderSnapshotDelay,
     this.sendMessageDelay,
@@ -18571,6 +18899,10 @@ class FakeDaemonApi implements DaemonApi {
     SessionSnapshot? attachResult,
     Map<String, WorkspaceDirectoryListing>? directoryListings,
     Map<String, Object>? directoryErrors,
+    Map<String, WorkspaceEntryListing>? workspaceEntryListings,
+    Map<String, WorkspaceFile>? workspaceFiles,
+    Map<String, Object>? workspaceEntryErrors,
+    Map<String, Object>? workspaceFileErrors,
     Stream<SessionEvent>? liveEvents,
     List<Stream<SessionEvent>>? liveEventStreams,
     List<Object>? sendMessageErrors,
@@ -18620,6 +18952,7 @@ class FakeDaemonApi implements DaemonApi {
            ),
        resumeResult = resumeResult ?? snapshot,
        olderSnapshotResult = olderSnapshot,
+       olderSnapshotResults = List<SessionSnapshot>.from(olderSnapshots ?? const []),
        bootstrapResult =
            bootstrap ??
            const MobileBootstrap(
@@ -18635,6 +18968,15 @@ class FakeDaemonApi implements DaemonApi {
            directoryListings ?? const <String, WorkspaceDirectoryListing>{},
        directoryErrors = Map<String, Object>.from(
          directoryErrors ?? const <String, Object>{},
+       ),
+       workspaceEntryListings =
+           workspaceEntryListings ?? const <String, WorkspaceEntryListing>{},
+       workspaceFiles = workspaceFiles ?? const <String, WorkspaceFile>{},
+       workspaceEntryErrors = Map<String, Object>.from(
+         workspaceEntryErrors ?? const <String, Object>{},
+       ),
+       workspaceFileErrors = Map<String, Object>.from(
+         workspaceFileErrors ?? const <String, Object>{},
        ),
        bootstrapErrors = List<Object>.from(bootstrapErrors ?? const []),
        refreshBootstrapErrors = List<Object>.from(
@@ -18677,6 +19019,7 @@ class FakeDaemonApi implements DaemonApi {
   final Object? resumeError;
   final Duration? resumeDelay;
   final SessionSnapshot? olderSnapshotResult;
+  final List<SessionSnapshot> olderSnapshotResults;
   final Object? olderSnapshotError;
   final Duration? olderSnapshotDelay;
   final Duration? sendMessageDelay;
@@ -18694,6 +19037,10 @@ class FakeDaemonApi implements DaemonApi {
   final SessionSnapshot attachResult;
   final Map<String, WorkspaceDirectoryListing> directoryListings;
   final Map<String, Object> directoryErrors;
+  final Map<String, WorkspaceEntryListing> workspaceEntryListings;
+  final Map<String, WorkspaceFile> workspaceFiles;
+  final Map<String, Object> workspaceEntryErrors;
+  final Map<String, Object> workspaceFileErrors;
   final List<Object> sendMessageErrors;
   final List<Object> uploadAttachmentErrors;
   final List<Stream<SessionEvent>> liveEventStreams;
@@ -18704,6 +19051,8 @@ class FakeDaemonApi implements DaemonApi {
   final List<SessionSummary> _mutableSessions;
   final List<String> bootstrappedTokens = <String>[];
   final List<String> directoryRequests = <String>[];
+  final List<String> workspaceEntryRequests = <String>[];
+  final List<String> workspaceFileRequests = <String>[];
   final List<String> snapshotRequests = <String>[];
   final List<String> resumedSessions = <String>[];
   final List<String> eventSubscriptions = <String>[];
@@ -18780,6 +19129,15 @@ class FakeDaemonApi implements DaemonApi {
     int? beforeEventId,
   }) async {
     snapshotRequests.add('$sessionId:$token:$beforeEventId');
+    if (beforeEventId != null && olderSnapshotResults.isNotEmpty) {
+      if (olderSnapshotDelay != null) {
+        await Future<void>.delayed(olderSnapshotDelay!);
+      }
+      if (olderSnapshotError != null) {
+        throw olderSnapshotError!;
+      }
+      return olderSnapshotResults.removeAt(0);
+    }
     if (beforeEventId != null && olderSnapshotResult != null) {
       if (olderSnapshotDelay != null) {
         await Future<void>.delayed(olderSnapshotDelay!);
@@ -18927,6 +19285,44 @@ class FakeDaemonApi implements DaemonApi {
       return listing;
     }
     throw StateError('No directory listing stub for $path');
+  }
+
+  @override
+  Future<WorkspaceEntryListing> sessionWorkspaceEntries({
+    required String sessionId,
+    required String token,
+    required String path,
+  }) async {
+    final key = '$sessionId:$path';
+    workspaceEntryRequests.add(key);
+    final error = workspaceEntryErrors[key];
+    if (error != null) {
+      throw error;
+    }
+    final listing = workspaceEntryListings[key];
+    if (listing != null) {
+      return listing;
+    }
+    throw StateError('No workspace entry listing stub for $key');
+  }
+
+  @override
+  Future<WorkspaceFile> sessionWorkspaceFile({
+    required String sessionId,
+    required String token,
+    required String path,
+  }) async {
+    final key = '$sessionId:$path';
+    workspaceFileRequests.add(key);
+    final error = workspaceFileErrors[key];
+    if (error != null) {
+      throw error;
+    }
+    final file = workspaceFiles[key];
+    if (file != null) {
+      return file;
+    }
+    throw StateError('No workspace file stub for $key');
   }
 
   @override

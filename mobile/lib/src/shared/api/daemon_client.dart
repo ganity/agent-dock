@@ -72,6 +72,18 @@ abstract class DaemonApi {
     required String path,
   });
 
+  Future<WorkspaceEntryListing> sessionWorkspaceEntries({
+    required String sessionId,
+    required String token,
+    required String path,
+  });
+
+  Future<WorkspaceFile> sessionWorkspaceFile({
+    required String sessionId,
+    required String token,
+    required String path,
+  });
+
   Future<List<ResumeCandidate>> listResumeCandidates({
     required String token,
     required String rootId,
@@ -388,6 +400,44 @@ class DaemonClient implements DaemonApi {
   }
 
   @override
+  Future<WorkspaceEntryListing> sessionWorkspaceEntries({
+    required String sessionId,
+    required String token,
+    required String path,
+  }) async {
+    final json = await _sendJson(
+      TransportRequest(
+        method: 'GET',
+        url: _url(
+          '/api/sessions/$sessionId/workspace/entries',
+        ).replace(queryParameters: {'path': path}),
+        headers: {'authorization': 'Bearer $token'},
+      ),
+    );
+
+    return WorkspaceEntryListing.fromJson(json);
+  }
+
+  @override
+  Future<WorkspaceFile> sessionWorkspaceFile({
+    required String sessionId,
+    required String token,
+    required String path,
+  }) async {
+    final json = await _sendJson(
+      TransportRequest(
+        method: 'GET',
+        url: _url(
+          '/api/sessions/$sessionId/workspace/file',
+        ).replace(queryParameters: {'path': path}),
+        headers: {'authorization': 'Bearer $token'},
+      ),
+    );
+
+    return WorkspaceFile.fromJson(json);
+  }
+
+  @override
   Future<List<ResumeCandidate>> listResumeCandidates({
     required String token,
     required String rootId,
@@ -618,6 +668,97 @@ class WorkspaceDirectoryListing {
   final String currentPath;
   final String? parentPath;
   final List<WorkspaceDirectoryEntry> directories;
+}
+
+enum WorkspaceEntryKind {
+  directory,
+  file;
+
+  static WorkspaceEntryKind fromJson(String value) {
+    return switch (value) {
+      'directory' => WorkspaceEntryKind.directory,
+      'file' => WorkspaceEntryKind.file,
+      _ => throw FormatException('Unknown workspace entry kind: $value'),
+    };
+  }
+}
+
+class WorkspaceEntry {
+  const WorkspaceEntry({
+    required this.name,
+    required this.path,
+    required this.kind,
+  });
+
+  factory WorkspaceEntry.fromJson(Map<String, Object?> json) {
+    return WorkspaceEntry(
+      name: json['name'] as String,
+      path: json['path'] as String,
+      kind: WorkspaceEntryKind.fromJson(json['kind'] as String),
+    );
+  }
+
+  final String name;
+  final String path;
+  final WorkspaceEntryKind kind;
+}
+
+class WorkspaceEntryListing {
+  const WorkspaceEntryListing({
+    required this.currentPath,
+    required this.parentPath,
+    required this.entries,
+  });
+
+  factory WorkspaceEntryListing.fromJson(Map<String, Object?> json) {
+    return WorkspaceEntryListing(
+      currentPath: json['currentPath'] as String,
+      parentPath: json['parentPath'] as String?,
+      entries: _objects(json['entries']).map(WorkspaceEntry.fromJson).toList(),
+    );
+  }
+
+  final String currentPath;
+  final String? parentPath;
+  final List<WorkspaceEntry> entries;
+}
+
+enum WorkspaceFileRenderMode {
+  markdown,
+  text;
+
+  static WorkspaceFileRenderMode fromJson(String value) {
+    return switch (value) {
+      'markdown' => WorkspaceFileRenderMode.markdown,
+      'text' => WorkspaceFileRenderMode.text,
+      _ => throw FormatException('Unknown workspace file render mode: $value'),
+    };
+  }
+}
+
+class WorkspaceFile {
+  const WorkspaceFile({
+    required this.name,
+    required this.path,
+    required this.content,
+    required this.renderMode,
+  });
+
+  factory WorkspaceFile.fromJson(Map<String, Object?> json) {
+    return WorkspaceFile(
+      name: json['name'] as String,
+      path: json['path'] as String,
+      content: json['content'] as String,
+      renderMode: WorkspaceFileRenderMode.fromJson(
+        json['renderMode'] as String,
+      ),
+    );
+  }
+
+  final String name;
+  final String path;
+  final String content;
+  final WorkspaceFileRenderMode renderMode;
 }
 
 class ResumeCandidate {

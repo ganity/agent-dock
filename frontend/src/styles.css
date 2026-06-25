@@ -107,6 +107,11 @@ select {
     padding: 20px 18px 18px;
   }
 
+  .session-files-grid {
+    grid-template-columns: 1fr;
+    min-height: 0;
+  }
+
   .session-modal-actions,
   [role="dialog"].panel.stack > form.stack footer {
     flex-direction: column-reverse;
@@ -566,6 +571,99 @@ select {
   background: rgba(255, 255, 255, 0.03);
   color: #d6dfef;
   line-height: 1.5;
+}
+
+.session-files-modal {
+  width: min(100%, 68rem);
+}
+
+.session-files-header,
+.session-file-preview-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.session-files-header h2,
+.session-file-preview-header h3 {
+  margin: 0;
+}
+
+.session-files-grid {
+  display: grid;
+  grid-template-columns: minmax(14rem, 20rem) minmax(0, 1fr);
+  gap: 16px;
+  min-height: 26rem;
+}
+
+.session-files-browser,
+.session-file-preview {
+  min-width: 0;
+  border: 1px solid rgba(130, 157, 209, 0.16);
+  border-radius: 18px;
+  background: rgba(4, 10, 20, 0.55);
+}
+
+.session-files-browser {
+  padding: 10px;
+}
+
+.session-files-path {
+  display: grid;
+  gap: 4px;
+  padding: 8px 10px 12px;
+  color: #c9d6ec;
+}
+
+.session-files-path small,
+.session-file-preview-header span {
+  color: #8fa1bd;
+}
+
+.session-files-list {
+  display: grid;
+  gap: 6px;
+}
+
+.session-file-row {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: #e7ecf5;
+  cursor: pointer;
+  text-align: left;
+}
+
+.session-file-row:hover,
+.session-file-row:focus-visible {
+  background: rgba(130, 157, 209, 0.12);
+}
+
+.session-file-kind {
+  min-width: 2.8rem;
+  color: #88a5d9;
+  font-size: 0.76rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.session-file-preview {
+  overflow: auto;
+  padding: 18px;
+}
+
+.session-file-text-preview {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-mono);
 }
 
 .session-modal-actions,

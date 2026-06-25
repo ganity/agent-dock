@@ -11,9 +11,11 @@ import {
   listDirectories,
   listResumeCandidates,
   listRoots,
+  listSessionWorkspaceEntries,
   listSessions,
   listUsers,
   login,
+  readSessionWorkspaceFile,
   resetUserPassword,
   resumeSession,
   restoreSession,
@@ -24,6 +26,7 @@ import { AttachSessionView } from "./components/AttachSessionView";
 import { CreateSessionView } from "./components/CreateSessionView";
 import { LoginView } from "./components/LoginView";
 import { SessionDetailView } from "./components/SessionDetailView";
+import { SessionFilesView } from "./components/SessionFilesView";
 import { SessionListView } from "./components/SessionListView";
 import { getSessionTitle } from "./sessionDisplay";
 import type { AdminUser, CurrentUser, SessionDetail, SessionEvent, SessionSummary, WorkspaceRoot } from "./types";
@@ -67,6 +70,7 @@ export default function App() {
   const [showAttachForm, setShowAttachForm] = useState(false);
   const [attachError, setAttachError] = useState<string | null>(null);
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
+  const [filesSessionId, setFilesSessionId] = useState<string | null>(null);
 
   function getErrorMessage(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
@@ -107,22 +111,25 @@ export default function App() {
     })();
   }, []);
 
+  const selectedSessionId = selectedSession?.id ?? null;
+  const selectedSessionLastEventId = selectedSession?.events.at(-1)?.id ?? 0;
+
   useEffect(() => {
-    if (!selectedSession) return;
+    if (!selectedSessionId) return;
 
     let disposed = false;
     let socket: WebSocket | null = null;
 
     const connect = (after: number) => {
       socket?.close();
-      socket = connectSessionEvents(selectedSession.id, after);
+      socket = connectSessionEvents(selectedSessionId, after);
       socket.onmessage = (event) => {
         const nextEvent = JSON.parse(event.data) as SessionEvent;
         if (nextEvent.eventType === "session.resync.required") {
           void (async () => {
-            const snapshot = await fetchSessionSnapshot(selectedSession.id, { limit: 50 });
+            const snapshot = await fetchSessionSnapshot(selectedSessionId, { limit: 50 });
             if (disposed) return;
-            setSelectedSession((current) => (current?.id === selectedSession.id ? snapshot : current));
+            setSelectedSession((current) => (current?.id === selectedSessionId ? snapshot : current));
             if (!disposed) {
               connect(snapshot.events.at(-1)?.id ?? 0);
             }
@@ -131,7 +138,7 @@ export default function App() {
         }
 
         setSelectedSession((current) => {
-          if (!current || current.id !== selectedSession.id) return current;
+          if (!current || current.id !== selectedSessionId) return current;
           if (current.events.some((item) => item.id === nextEvent.id)) return current;
           const nextStatus =
             nextEvent.eventType === "session.status.changed"
@@ -146,13 +153,15 @@ export default function App() {
       };
     };
 
-    connect(selectedSession.events.at(-1)?.id ?? 0);
+    connect(selectedSessionLastEventId);
 
     return () => {
       disposed = true;
       socket?.close();
     };
-  }, [selectedSession]);
+  }, [selectedSessionId]);
+
+  const filesSession = filesSessionId ? sessions.find((item) => item.id === filesSessionId) : undefined;
 
   return (
     <main className="shell">
@@ -256,6 +265,9 @@ export default function App() {
                   setSelectedSession(detail);
                 })();
               }}
+              onBrowseFiles={(sessionId) => {
+                setFilesSessionId(sessionId);
+              }}
               onDelete={(sessionId) => {
                 const session = sessions.find((item) => item.id === sessionId);
                 if (!session) {
@@ -282,6 +294,15 @@ export default function App() {
               }}
               deletingSessionId={deletingSessionId}
             />
+            {filesSessionId ? (
+              <SessionFilesView
+                sessionId={filesSessionId}
+                title={filesSession ? getSessionTitle(filesSession) : "Session files"}
+                loadEntries={listSessionWorkspaceEntries}
+                loadFile={readSessionWorkspaceFile}
+                onClose={() => setFilesSessionId(null)}
+              />
+            ) : null}
             {showCreateForm ? (
               <CreateSessionView
                 roots={roots}
@@ -359,7 +380,7 @@ export default function App() {
 function readSessionStatus(payload: Record<string, unknown>): string | undefined {
   const rawStatus = payload.status;
   if (typeof rawStatus === "string") {
-    const value = rawStatus.trim();
+    const value = normalizeSessionStatus(rawStatus);
     return value ? value : undefined;
   }
   if (
@@ -367,8 +388,24 @@ function readSessionStatus(payload: Record<string, unknown>): string | undefined
     rawStatus !== null &&
     typeof (rawStatus as { type?: unknown }).type === "string"
   ) {
-    const value = ((rawStatus as { type: string }).type).trim();
+    const value = normalizeSessionStatus((rawStatus as { type: string }).type);
+    return value ? value : undefined;
+  }
+  if (
+    typeof payload.turn === "object" &&
+    payload.turn !== null &&
+    typeof (payload.turn as { status?: unknown }).status === "string"
+  ) {
+    const value = normalizeSessionStatus((payload.turn as { status: string }).status);
     return value ? value : undefined;
   }
   return undefined;
+}
+
+function normalizeSessionStatus(value: string): string {
+  const normalized = value.trim();
+  if (normalized === "completed") {
+    return "suspended";
+  }
+  return normalized;
 }
