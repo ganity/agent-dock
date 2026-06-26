@@ -756,6 +756,52 @@ describe("App", () => {
     expect(fetchSessionSnapshot).not.toHaveBeenCalledWith("sess-1", { limit: 50 });
   });
 
+  it("resumes a running codex session with desynced runtime health before opening details", async () => {
+    vi.mocked(listSessions).mockResolvedValueOnce([
+      {
+        id: "sess-1",
+        title: "Launch Pad",
+        agentKind: "codex",
+        sourceKind: "managed",
+        workspacePath: "apps/api",
+        runtimeSessionId: "thread-1",
+        runtimeHealth: "desynced",
+        runtimeErrorKind: "transport",
+        status: "running",
+      },
+    ]);
+    vi.mocked(resumeSession).mockResolvedValueOnce({
+      id: "sess-1",
+      title: "Launch Pad",
+      agentKind: "codex",
+      sourceKind: "managed",
+      workspacePath: "apps/api",
+      runtimeSessionId: "thread-1",
+      runtimeHealth: "online",
+      runtimeErrorMessage: null,
+      status: "running",
+      hasMoreHistory: false,
+      events: [{ id: 7, eventType: "session.status.changed", payload: { status: "running" } }],
+    });
+
+    render(<App />);
+
+    fireEvent.change(await screen.findByLabelText("Username"), { target: { value: "admin" } });
+    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "1234" } });
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+    await waitFor(() => {
+      expect(listSessions).toHaveBeenCalledTimes(1);
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Open Launch Pad" }));
+
+    await waitFor(() => {
+      expect(resumeSession).toHaveBeenCalledWith("sess-1");
+    });
+    expect(fetchSessionSnapshot).not.toHaveBeenCalledWith("sess-1", { limit: 50 });
+  });
+
   it("opens a running codex session with provider recoverable error by fetching a snapshot first", async () => {
     vi.mocked(listSessions).mockResolvedValueOnce([
       {

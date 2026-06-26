@@ -295,41 +295,12 @@ impl SessionService {
     pub async fn resume_session(&self, session_id: &str) -> anyhow::Result<SessionSnapshot> {
         let snapshot = self.store.load_snapshot(session_id).await?;
 
-        if snapshot.session.agent_kind == "codex"
-            && self
-                .runtime_inputs
-                .lock()
-                .unwrap()
-                .get(session_id)
-                .is_none()
-        {
-            self.store.reset_in_flight_user_messages(session_id).await?;
-            let resume_thread_id = snapshot
-                .session
-                .runtime_session_id
-                .clone()
-                .or_else(|| find_latest_codex_thread_id(&snapshot.events));
-
-            if let Some(thread_id) = resume_thread_id {
-                if snapshot.session.runtime_session_id.as_deref() != Some(thread_id.as_str()) {
-                    self.store
-                        .update_runtime_session_id(session_id, &thread_id)
-                        .await?;
-                }
-
-                self.spawn_attached_codex_runtime(
-                    session_id,
-                    &snapshot.session.workspace_path,
-                    thread_id,
-                )
-                .await?;
-            } else if snapshot.session.source_kind == "managed" {
-                self.spawn_codex_runtime(session_id, &snapshot.session.workspace_path)
-                    .await?;
-            }
+        if snapshot.session.agent_kind == "codex" {
+            self.ensure_codex_runtime(session_id).await?;
         }
 
-        self.drain_codex_pending_messages(session_id).await?;
+        self.drain_codex_pending_messages_with_recovery(session_id)
+            .await?;
 
         self.store
             .load_snapshot_window(session_id, Some(50), None)
@@ -415,40 +386,10 @@ impl SessionService {
                 )
                 .await?;
 
-            if self
-                .runtime_inputs
-                .lock()
-                .unwrap()
-                .get(session_id)
-                .is_none()
-            {
-                self.store.reset_in_flight_user_messages(session_id).await?;
-                let resume_thread_id = snapshot
-                    .session
-                    .runtime_session_id
-                    .clone()
-                    .or_else(|| find_latest_codex_thread_id(&snapshot.events));
+            self.ensure_codex_runtime(session_id).await?;
 
-                if let Some(thread_id) = resume_thread_id {
-                    if snapshot.session.runtime_session_id.as_deref() != Some(thread_id.as_str()) {
-                        self.store
-                            .update_runtime_session_id(session_id, &thread_id)
-                            .await?;
-                    }
-
-                    self.spawn_attached_codex_runtime(
-                        session_id,
-                        &snapshot.session.workspace_path,
-                        thread_id,
-                    )
-                    .await?;
-                } else if snapshot.session.source_kind == "managed" {
-                    self.spawn_codex_runtime(session_id, &snapshot.session.workspace_path)
-                        .await?;
-                }
-            }
-
-            self.drain_codex_pending_messages(session_id).await?;
+            self.drain_codex_pending_messages_with_recovery(session_id)
+                .await?;
             return Ok(event_id);
         }
 
@@ -481,6 +422,25 @@ impl SessionService {
             &sender,
         )
         .await
+    }
+
+    async fn drain_codex_pending_messages_with_recovery(
+        &self,
+        session_id: &str,
+    ) -> anyhow::Result<()> {
+        match self.drain_codex_pending_messages(session_id).await {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                let snapshot = self.store.load_snapshot(session_id).await?;
+                if snapshot.session.agent_kind == "codex"
+                    && snapshot.session.runtime_health == "desynced"
+                {
+                    self.ensure_codex_runtime(session_id).await?;
+                    return self.drain_codex_pending_messages(session_id).await;
+                }
+                Err(error)
+            }
+        }
     }
 
     async fn spawn_claude_turn(
@@ -659,12 +619,62 @@ impl SessionService {
 
         tokio::spawn(async move {
             let mut stdin = stdin;
+            let writer_store = store.clone();
+            let writer_session_id = session_id.clone();
             let writer = tokio::spawn(async move {
                 while let Some(message) = rx.recv().await {
                     if stdin.write_all(message.as_bytes()).await.is_err() {
+                        let message =
+                            "Codex runtime input stream closed before the current message completed.";
+                        let _ = writer_store
+                            .reset_in_flight_user_messages(&writer_session_id)
+                            .await;
+                        let _ = writer_store
+                            .update_runtime_health(
+                                &writer_session_id,
+                                "desynced",
+                                Some("transport"),
+                                Some(message),
+                            )
+                            .await;
+                        let _ = writer_store
+                            .append_event(
+                                &writer_session_id,
+                                "session.error",
+                                &serde_json::json!({
+                                    "message": message,
+                                    "willRetry": true
+                                })
+                                .to_string(),
+                            )
+                            .await;
                         break;
                     }
                     if stdin.flush().await.is_err() {
+                        let message =
+                            "Codex runtime input stream closed before the current message completed.";
+                        let _ = writer_store
+                            .reset_in_flight_user_messages(&writer_session_id)
+                            .await;
+                        let _ = writer_store
+                            .update_runtime_health(
+                                &writer_session_id,
+                                "desynced",
+                                Some("transport"),
+                                Some(message),
+                            )
+                            .await;
+                        let _ = writer_store
+                            .append_event(
+                                &writer_session_id,
+                                "session.error",
+                                &serde_json::json!({
+                                    "message": message,
+                                    "willRetry": true
+                                })
+                                .to_string(),
+                            )
+                            .await;
                         break;
                     }
                 }
@@ -854,6 +864,63 @@ impl SessionService {
 
         Ok(())
     }
+
+    fn codex_runtime_needs_resume(&self, session_id: &str, runtime_health: &str) -> bool {
+        if runtime_health == "desynced" {
+            return true;
+        }
+
+        let has_sender = self.runtime_inputs.lock().unwrap().contains_key(session_id);
+        let has_child = self.runtime_children.lock().unwrap().contains_key(session_id);
+        !has_sender || !has_child
+    }
+
+    async fn reset_codex_runtime_state(&self, session_id: &str) {
+        let sender = self.runtime_inputs.lock().unwrap().remove(session_id);
+        drop(sender);
+        self.codex_protocols.lock().unwrap().remove(session_id);
+
+        let child_handle = self.runtime_children.lock().unwrap().remove(session_id);
+        if let Some(child_handle) = child_handle {
+            let mut child = child_handle.lock().await;
+            if let Some(mut child) = child.take() {
+                let _ = child.start_kill();
+                let _ = child.wait().await;
+            }
+        }
+    }
+
+    async fn ensure_codex_runtime(&self, session_id: &str) -> anyhow::Result<()> {
+        let snapshot = self.store.load_snapshot(session_id).await?;
+        if !self.codex_runtime_needs_resume(session_id, &snapshot.session.runtime_health) {
+            return Ok(());
+        }
+
+        self.reset_codex_runtime_state(session_id).await;
+        self.store.reset_in_flight_user_messages(session_id).await?;
+
+        let resume_thread_id = snapshot
+            .session
+            .runtime_session_id
+            .clone()
+            .or_else(|| find_latest_codex_thread_id(&snapshot.events));
+
+        if let Some(thread_id) = resume_thread_id {
+            if snapshot.session.runtime_session_id.as_deref() != Some(thread_id.as_str()) {
+                self.store
+                    .update_runtime_session_id(session_id, &thread_id)
+                    .await?;
+            }
+
+            self.spawn_attached_codex_runtime(session_id, &snapshot.session.workspace_path, thread_id)
+                .await?;
+        } else if snapshot.session.source_kind == "managed" {
+            self.spawn_codex_runtime(session_id, &snapshot.session.workspace_path)
+                .await?;
+        }
+
+        Ok(())
+    }
 }
 
 fn encode_runtime_input(agent_kind: &str, message: &str) -> String {
@@ -916,6 +983,8 @@ async fn drain_one_codex_pending_message(
     let Some(pending_message) = store.claim_next_pending_user_message(session_id).await? else {
         return Ok(());
     };
+    let pending_message_id = pending_message.id;
+    let pending_message_text = pending_message.text.clone();
 
     let outgoing = {
         let mut protocols = codex_protocols.lock().unwrap();
@@ -934,13 +1003,46 @@ async fn drain_one_codex_pending_message(
 
     let Some(outgoing) = outgoing else {
         store.reset_in_flight_user_messages(session_id).await?;
-        return Ok(());
+        let message = "Codex session protocol desynced before the pending message could be sent.";
+        store
+            .update_runtime_health(session_id, "desynced", Some("protocol"), Some(message))
+            .await?;
+        store
+            .append_event(
+                session_id,
+                "session.error",
+                &serde_json::json!({
+                    "message": message,
+                    "willRetry": true
+                })
+                .to_string(),
+            )
+            .await?;
+        return Err(anyhow::anyhow!(message));
     };
 
     for request in outgoing {
-        sender
-            .send(encode_json_line(request))
-            .map_err(|_| anyhow::anyhow!("managed runtime input channel closed"))?;
+        if sender.send(encode_json_line(request)).is_err() {
+            let message = "Codex runtime input channel closed before the pending message could be sent.";
+            store.reset_in_flight_user_messages(session_id).await?;
+            store
+                .update_runtime_health(session_id, "desynced", Some("transport"), Some(message))
+                .await?;
+            store
+                .append_event(
+                    session_id,
+                    "session.error",
+                    &serde_json::json!({
+                    "message": message,
+                    "pendingMessageId": pending_message_id,
+                    "pendingMessageText": pending_message_text,
+                    "willRetry": true
+                })
+                    .to_string(),
+                )
+                .await?;
+            return Err(anyhow::anyhow!(message));
+        }
     }
 
     Ok(())

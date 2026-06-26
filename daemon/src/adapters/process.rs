@@ -16,6 +16,7 @@ pub fn claude_turn_launch(message: &str, resume_session_id: Option<&str>) -> Lau
     let mut args = vec![
         "--print".into(),
         "--bare".into(),
+        "--dangerously-skip-permissions".into(),
         "--verbose".into(),
         "--output-format".into(),
         "stream-json".into(),

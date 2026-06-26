@@ -1218,6 +1218,182 @@ async fn managed_codex_session_marks_runtime_crash_with_in_flight_message_as_rec
 }
 
 #[tokio::test]
+async fn managed_codex_session_marks_send_failure_as_desynced_and_requeues_message() {
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("agent-dock.sqlite3");
+    let spawner = Arc::new(move |_command: LaunchCommand| {
+        spawn_command(LaunchCommand {
+            program: "sh".into(),
+            args: vec![
+                "-lc".into(),
+                "IFS= read -r _init; printf '%s\n' '{\"jsonrpc\":\"2.0\",\"id\":\"agent-dock-initialize-1\",\"result\":{}}'; \
+                 IFS= read -r _resume; printf '%s\n' '{\"jsonrpc\":\"2.0\",\"id\":\"agent-dock-thread-resume-2\",\"result\":{\"thread\":{\"id\":\"thread-1\"}}}'; \
+                 exec 0<&-; \
+                 sleep 1".into(),
+            ],
+        })
+    });
+
+    let seed_store = SqliteSessionStore::from_path(&db_path).await.unwrap();
+    let session_id = seed_store
+        .create_session(
+            "usr_workspace".into(),
+            "workspace".into(),
+            "repo".into(),
+            "attached".into(),
+            "codex".into(),
+            None,
+        )
+        .await
+        .unwrap();
+    seed_store
+        .update_runtime_session_id(&session_id, "thread-1")
+        .await
+        .unwrap();
+    seed_store
+        .append_user_message_and_enqueue_pending(&session_id, None, "retry after desync".into(), &[])
+        .await
+        .unwrap();
+    drop(seed_store);
+
+    let store = SqliteSessionStore::from_path(&db_path).await.unwrap();
+    let service = SessionService::new_with_spawner(store, spawner);
+    service.resume_session(&session_id).await.unwrap();
+
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let snapshot = service.load_snapshot(&session_id).await.unwrap();
+            if snapshot.session.runtime_health == "desynced" {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("send failure should desync the session");
+
+    let verify_store = SqliteSessionStore::from_path(&db_path).await.unwrap();
+    let pending = verify_store
+        .pending_user_messages(&session_id)
+        .await
+        .unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].text, "retry after desync");
+    assert!(
+        verify_store
+            .in_flight_user_message(&session_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    let snapshot = service.load_snapshot(&session_id).await.unwrap();
+    assert_eq!(snapshot.session.runtime_health, "desynced");
+    assert_eq!(
+        snapshot.session.runtime_error_kind.as_deref(),
+        Some("transport")
+    );
+}
+
+#[tokio::test]
+async fn managed_codex_session_resumes_desynced_session_before_sending_next_message() {
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("agent-dock.sqlite3");
+    let second_attempt_path = dir.path().join("desync-second.jsonl");
+    let second_attempt_path_for_spawner = second_attempt_path.clone();
+    let launch_count = Arc::new(std::sync::Mutex::new(0usize));
+    let launch_count_for_spawner = launch_count.clone();
+    let spawner = Arc::new(move |_command: LaunchCommand| {
+        let mut launch_count = launch_count_for_spawner.lock().unwrap();
+        *launch_count += 1;
+        let launch_number = *launch_count;
+        drop(launch_count);
+
+        let capture_path = second_attempt_path_for_spawner.clone();
+
+        spawn_command(LaunchCommand {
+            program: "sh".into(),
+            args: vec![
+                "-lc".into(),
+                if launch_number == 1 {
+                    "IFS= read -r _init; printf '%s\n' '{\"jsonrpc\":\"2.0\",\"id\":\"agent-dock-initialize-1\",\"result\":{}}'; \
+                     IFS= read -r _resume; printf '%s\n' '{\"jsonrpc\":\"2.0\",\"id\":\"agent-dock-thread-resume-2\",\"result\":{\"thread\":{\"id\":\"thread-1\"}}}'; \
+                     exec 0<&-; \
+                     sleep 1".into()
+                } else {
+                    "IFS= read -r _init; printf '%s\n' '{\"jsonrpc\":\"2.0\",\"id\":\"agent-dock-initialize-1\",\"result\":{}}'; \
+                     IFS= read -r _resume; printf '%s\n' '{\"jsonrpc\":\"2.0\",\"id\":\"agent-dock-thread-resume-2\",\"result\":{\"thread\":{\"id\":\"thread-1\"}}}'; \
+                     IFS= read -r turn_request; printf '%s\n' \"$turn_request\" > \"$1\"; \
+                     printf '%s\n' '{\"jsonrpc\":\"2.0\",\"method\":\"turn/completed\",\"params\":{\"turnId\":\"turn-1\",\"threadId\":\"thread-1\",\"status\":{\"type\":\"completed\"}}}'; \
+                     sleep 1".into()
+                },
+                "agent-dock-test".into(),
+                capture_path.to_string_lossy().into_owned(),
+            ],
+        })
+    });
+
+    let seed_store = SqliteSessionStore::from_path(&db_path).await.unwrap();
+    let session_id = seed_store
+        .create_session(
+            "usr_workspace".into(),
+            "workspace".into(),
+            "repo".into(),
+            "attached".into(),
+            "codex".into(),
+            None,
+        )
+        .await
+        .unwrap();
+    seed_store
+        .update_runtime_session_id(&session_id, "thread-1")
+        .await
+        .unwrap();
+    seed_store
+        .append_user_message_and_enqueue_pending(&session_id, None, "first message".into(), &[])
+        .await
+        .unwrap();
+    drop(seed_store);
+
+    let store = SqliteSessionStore::from_path(&db_path).await.unwrap();
+    let service = SessionService::new_with_spawner(store, spawner);
+    service.resume_session(&session_id).await.unwrap();
+
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let snapshot = service.load_snapshot(&session_id).await.unwrap();
+            if snapshot.session.runtime_health == "desynced" {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("first send should desync");
+
+    service
+        .send_user_message(&session_id, "second message".into())
+        .await
+        .unwrap();
+
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while !second_attempt_path.exists() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("second runtime should send the next message after resume");
+
+    let second_attempt = tokio::fs::read_to_string(&second_attempt_path)
+        .await
+        .unwrap();
+    assert!(second_attempt.contains("first message") || second_attempt.contains("second message"));
+
+    let snapshot = service.load_snapshot(&session_id).await.unwrap();
+    assert_ne!(snapshot.session.runtime_health, "desynced");
+}
+
+#[tokio::test]
 async fn managed_codex_session_falls_back_to_fresh_start_after_resume_protocol_error() {
     let store = SqliteSessionStore::in_memory().await.unwrap();
     let recorded = Arc::new(std::sync::Mutex::new(Vec::<LaunchCommand>::new()));

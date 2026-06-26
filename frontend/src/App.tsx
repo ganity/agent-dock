@@ -43,6 +43,8 @@ function shouldResumeCodexSessionBeforeOpen(session: SessionSummary | undefined)
   switch (session.runtimeHealth) {
     case "offline":
       return true;
+    case "desynced":
+      return true;
     case "unknown":
       return Boolean(session.runtimeSessionId);
     case "recoverable_error":

@@ -48,6 +48,7 @@ _ResolvedOpenSession _resolveSessionForOpen({required SessionSummary session}) {
   final runtimeErrorKind = session.runtimeErrorKind?.toLowerCase();
   final shouldResumeForRuntimeHealth =
       runtimeHealth == 'offline' ||
+      runtimeHealth == 'desynced' ||
       (runtimeHealth == 'unknown' &&
           (session.runtimeSessionId?.isNotEmpty ?? false)) ||
       (runtimeHealth == 'recoverable_error' &&

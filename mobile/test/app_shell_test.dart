@@ -2028,6 +2028,90 @@ void main() {
   );
 
   testWidgets(
+    'opens a running desynced session detail and starts a background resume',
+    (tester) async {
+      final api = FakeDaemonApi(
+        bootstrap: MobileBootstrap(
+          daemonVersion: '0.1.0',
+          user: const CurrentUser(
+            id: 'usr_workspace',
+            displayName: 'Workspace',
+          ),
+          roots: const <WorkspaceRoot>[],
+          sessions: const [
+            SessionSummary(
+              id: 'sess_1',
+              title: 'Desynced session',
+              agentKind: 'codex',
+              sourceKind: 'managed',
+              runtimeSessionId: 'runtime_1',
+              runtimeHealth: 'desynced',
+              runtimeErrorKind: 'transport',
+              status: 'running',
+              workspacePath: '/tmp/workspace',
+            ),
+          ],
+          voice: const VoiceConfig(doubaoDirectAvailable: false),
+        ),
+        resumeResult: const SessionSnapshot(
+          id: 'sess_1',
+          title: 'Desynced session',
+          agentKind: 'codex',
+          sourceKind: 'managed',
+          runtimeSessionId: 'runtime_1',
+          runtimeHealth: 'online',
+          workspacePath: '/tmp/workspace',
+          status: 'running',
+          hasMoreHistory: false,
+          events: [
+            SessionEvent(
+              id: 3,
+              eventType: 'session.status.changed',
+              payload: {'status': 'running'},
+            ),
+          ],
+        ),
+        snapshot: const SessionSnapshot(
+          id: 'sess_1',
+          title: 'Desynced session',
+          agentKind: 'codex',
+          sourceKind: 'managed',
+          runtimeSessionId: 'runtime_1',
+          runtimeHealth: 'desynced',
+          runtimeErrorKind: 'transport',
+          workspacePath: '/tmp/workspace',
+          status: 'running',
+          hasMoreHistory: false,
+          events: [
+            SessionEvent(
+              id: 2,
+              eventType: 'assistant.message',
+              payload: {'text': 'stale view'},
+            ),
+          ],
+        ),
+        attachDelay: const Duration(milliseconds: 1),
+        resumeDelay: const Duration(seconds: 2),
+        snapshotDelay: const Duration(seconds: 2),
+      );
+
+      await pumpApp(tester, api: api);
+      await tester.enterText(find.byType(TextField).at(0), 'workspace');
+      await tester.enterText(find.byType(TextField).at(1), '1234');
+      await tester.tap(find.text('Sign in'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Desynced session'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
+      expect(api.resumedSessions, ['sess_1:tok_workspace']);
+      await tester.pump(const Duration(seconds: 2));
+      await tester.pump();
+    },
+  );
+
+  testWidgets(
     'opens a running provider-error session detail without starting a background resume',
     (tester) async {
       final api = FakeDaemonApi(
