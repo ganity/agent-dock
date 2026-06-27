@@ -3,6 +3,7 @@ use axum::Router;
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
+    time::Duration,
 };
 
 use tokio::process::Child;
@@ -12,15 +13,21 @@ use crate::{
     auth::AuthState,
     config::AppConfig,
     http::routes::routes,
+    middleware::rate_limit::RateLimiter,
     session::{service::SessionService, store::SqliteSessionStore},
     user::store::SqliteUserStore,
 };
+
+/// Default rate limit: 60 requests per minute per user.
+const DEFAULT_RATE_LIMIT: usize = 60;
+const DEFAULT_RATE_WINDOW: Duration = Duration::from_secs(60);
 
 #[derive(Clone)]
 pub struct AppState {
     pub config: AppConfig,
     pub auth: AuthState,
     pub sessions: SessionService,
+    pub rate_limiter: RateLimiter,
 }
 
 pub async fn build_router(config: AppConfig) -> anyhow::Result<Router> {
@@ -28,12 +35,36 @@ pub async fn build_router(config: AppConfig) -> anyhow::Result<Router> {
     let store = SqliteSessionStore::from_path(Path::new(&config.database_path)).await?;
     let users = SqliteUserStore::from_path(Path::new(&config.database_path)).await?;
     ensure_bootstrap_admin(&config, &users).await?;
+
+    let rate_limiter = RateLimiter::new(
+        config.rate_limit_max_requests.unwrap_or(DEFAULT_RATE_LIMIT),
+        config
+            .rate_limit_window_secs
+            .map(Duration::from_secs)
+            .unwrap_or(DEFAULT_RATE_WINDOW),
+    );
+
+    let auth = AuthState::new(users);
+
+    // Spawn background task to evict expired auth sessions every hour
+    {
+        let auth = auth.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(3600));
+            loop {
+                interval.tick().await;
+                auth.evict_expired_sessions();
+            }
+        });
+    }
+
     let state = AppState {
-        auth: AuthState::new(users),
+        auth,
         sessions: SessionService::new(store).with_claude_projects_root(
             config.claude_projects_path.as_ref().map(PathBuf::from),
         ),
         config,
+        rate_limiter,
     };
 
     Ok(routes().with_state(state))
@@ -84,6 +115,7 @@ pub async fn build_test_router_with_config_and_spawner(
                     .join("attachments"),
             )
             .with_claude_projects_root(config.claude_projects_path.as_ref().map(PathBuf::from)),
+        rate_limiter: RateLimiter::new(0, Duration::from_secs(60)), // disabled for tests
         config,
     };
 

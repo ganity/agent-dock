@@ -27,6 +27,19 @@ use crate::{
 type ProcessSpawner = Arc<dyn Fn(LaunchCommand) -> anyhow::Result<Child> + Send + Sync>;
 type RuntimeChild = Arc<TokioMutex<Option<Child>>>;
 
+/// Per-session mutex that prevents concurrent message sends or runtime
+/// operations on the same session. This mirrors cc-connect's
+/// Session.TryLock/Unlock mechanism.
+type SessionLocks = Arc<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>;
+
+/// Tracks the last time a running session produced an event, used for
+/// stale-session detection.
+type SessionHeartbeats = Arc<Mutex<HashMap<String, std::time::Instant>>>;
+
+/// Maximum time a session can be in "running" state without producing
+/// any events before it is considered potentially stuck.
+const STALE_SESSION_TIMEOUT_SECS: u64 = 600; // 10 minutes
+
 #[derive(Clone)]
 pub struct SessionService {
     store: Arc<SqliteSessionStore>,
@@ -36,11 +49,15 @@ pub struct SessionService {
     runtime_inputs: Arc<Mutex<HashMap<String, mpsc::UnboundedSender<String>>>>,
     codex_protocols: Arc<Mutex<HashMap<String, CodexSessionProtocol>>>,
     runtime_children: Arc<Mutex<HashMap<String, RuntimeChild>>>,
+    /// Per-session locks to serialize operations that mutate runtime state.
+    session_locks: SessionLocks,
+    /// Last event timestamp per session for stale detection.
+    session_heartbeats: SessionHeartbeats,
 }
 
 impl SessionService {
     pub fn new(store: SqliteSessionStore) -> Self {
-        Self {
+        let service = Self {
             store: Arc::new(store),
             process_spawner: Arc::new(spawn_command),
             attachment_root: Arc::new(PathBuf::from("./daemon-data/attachments")),
@@ -48,11 +65,15 @@ impl SessionService {
             runtime_inputs: Arc::new(Mutex::new(HashMap::new())),
             codex_protocols: Arc::new(Mutex::new(HashMap::new())),
             runtime_children: Arc::new(Mutex::new(HashMap::new())),
-        }
+            session_locks: Arc::new(Mutex::new(HashMap::new())),
+            session_heartbeats: Arc::new(Mutex::new(HashMap::new())),
+        };
+        service.spawn_stale_session_detector();
+        service
     }
 
     pub fn new_with_spawner(store: SqliteSessionStore, process_spawner: ProcessSpawner) -> Self {
-        Self {
+        let service = Self {
             store: Arc::new(store),
             process_spawner,
             attachment_root: Arc::new(PathBuf::from("./daemon-data/attachments")),
@@ -60,7 +81,97 @@ impl SessionService {
             runtime_inputs: Arc::new(Mutex::new(HashMap::new())),
             codex_protocols: Arc::new(Mutex::new(HashMap::new())),
             runtime_children: Arc::new(Mutex::new(HashMap::new())),
-        }
+            session_locks: Arc::new(Mutex::new(HashMap::new())),
+            session_heartbeats: Arc::new(Mutex::new(HashMap::new())),
+        };
+        service.spawn_stale_session_detector();
+        service
+    }
+
+    /// Record that a session produced an event (heartbeat).
+    fn touch_session_heartbeat(&self, session_id: &str) {
+        self.session_heartbeats
+            .lock()
+            .unwrap()
+            .insert(session_id.to_string(), std::time::Instant::now());
+    }
+
+    /// Background task that detects sessions stuck in "running" state
+    /// without producing events for STALE_SESSION_TIMEOUT_SECS.
+    fn spawn_stale_session_detector(&self) {
+        let store = self.store.clone();
+        let heartbeats = self.session_heartbeats.clone();
+
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+            loop {
+                interval.tick().await;
+
+                let stale_threshold = std::time::Duration::from_secs(STALE_SESSION_TIMEOUT_SECS);
+                let now = std::time::Instant::now();
+
+                // Collect session IDs that appear stale
+                let stale_sessions: Vec<String> = {
+                    let heartbeats = heartbeats.lock().unwrap();
+                    heartbeats
+                        .iter()
+                        .filter(|(_, last_event)| {
+                            now.duration_since(**last_event) > stale_threshold
+                        })
+                        .map(|(session_id, _)| session_id.clone())
+                        .collect()
+                };
+
+                for session_id in stale_sessions {
+                    // Check if the session is still in "running" state
+                    let snapshot = match store.load_snapshot(&session_id).await {
+                        Ok(snapshot) => snapshot,
+                        Err(_) => continue,
+                    };
+
+                    if snapshot.session.status != "running" {
+                        // Session is no longer running; clean up heartbeat
+                        heartbeats.lock().unwrap().remove(&session_id);
+                        continue;
+                    }
+
+                    eprintln!(
+                        "warn: session {} appears stuck (no events for {}s), marking as stale",
+                        session_id, STALE_SESSION_TIMEOUT_SECS
+                    );
+
+                    // Mark the session as having a recoverable error
+                    let _ = store
+                        .update_runtime_health(
+                            &session_id,
+                            "stale",
+                            Some("heartbeat"),
+                            Some(&format!(
+                                "No events received for {}s; session may be stuck",
+                                STALE_SESSION_TIMEOUT_SECS
+                            )),
+                        )
+                        .await;
+                }
+            }
+        });
+    }
+
+    /// Acquires the per-session lock for the given session ID.
+    /// This serializes concurrent operations (send, resume, delete) on the
+    /// same session, preventing data races.
+    ///
+    /// The lock is an Arc<Mutex<>>, so the returned guard keeps the
+    /// underlying mutex alive even if the map entry is removed.
+    async fn lock_session(&self, session_id: &str) -> tokio::sync::OwnedMutexGuard<()> {
+        let lock = {
+            let mut locks = self.session_locks.lock().unwrap();
+            locks
+                .entry(session_id.to_string())
+                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+                .clone()
+        };
+        lock.lock_owned().await
     }
 
     pub fn with_attachment_root(mut self, attachment_root: PathBuf) -> Self {
@@ -232,6 +343,8 @@ impl SessionService {
     }
 
     pub async fn delete_session(&self, session_id: &str) -> anyhow::Result<bool> {
+        let _guard = self.lock_session(session_id).await;
+
         let sender = self.runtime_inputs.lock().unwrap().remove(session_id);
         drop(sender);
         self.codex_protocols.lock().unwrap().remove(session_id);
@@ -293,6 +406,8 @@ impl SessionService {
     }
 
     pub async fn resume_session(&self, session_id: &str) -> anyhow::Result<SessionSnapshot> {
+        let _guard = self.lock_session(session_id).await;
+
         let snapshot = self.store.load_snapshot(session_id).await?;
 
         if snapshot.session.agent_kind == "codex" {
@@ -318,11 +433,20 @@ impl SessionService {
         directory.push(session_id);
         tokio::fs::create_dir_all(&directory).await?;
 
-        let mut path = directory;
-        path.push(format!("{}-{safe_filename}", uuid::Uuid::new_v4()));
-        tokio::fs::write(&path, bytes).await?;
+        // Atomic write: write to a temp file in the same directory, then rename.
+        // This prevents half-written files on crash (mirrors cc-connect's AtomicWriteFile).
+        let final_name = format!("{}-{safe_filename}", uuid::Uuid::new_v4());
+        let mut final_path = directory.clone();
+        final_path.push(&final_name);
 
-        let absolute = tokio::fs::canonicalize(path).await?;
+        let temp_name = format!(".tmp-{}", uuid::Uuid::new_v4());
+        let mut temp_path = directory;
+        temp_path.push(&temp_name);
+
+        tokio::fs::write(&temp_path, bytes).await?;
+        tokio::fs::rename(&temp_path, &final_path).await?;
+
+        let absolute = tokio::fs::canonicalize(final_path).await?;
         Ok(absolute.to_string_lossy().into_owned())
     }
 
@@ -358,7 +482,17 @@ impl SessionService {
         message: String,
         image_paths: Vec<String>,
     ) -> anyhow::Result<i64> {
+        // Serialize per-session operations to prevent concurrent sends
+        // racing on runtime state (stdin, protocol, child process).
+        let _guard = self.lock_session(session_id).await;
+
         let snapshot = self.store.load_snapshot(session_id).await?;
+
+        if message.trim() == "/stop" {
+            return self
+                .stop_current_task(session_id, &snapshot.session.agent_kind)
+                .await;
+        }
 
         if snapshot.session.agent_kind == "claude" {
             let event_id = self
@@ -410,6 +544,58 @@ impl SessionService {
         Ok(event_id)
     }
 
+    async fn stop_current_task(&self, session_id: &str, agent_kind: &str) -> anyhow::Result<i64> {
+        let stop_message = match agent_kind {
+            "claude" => {
+                let child_handle = self
+                    .runtime_children
+                    .lock()
+                    .unwrap()
+                    .get(session_id)
+                    .cloned();
+                if let Some(child_handle) = child_handle {
+                    let mut child = child_handle.lock().await;
+                    if let Some(mut child) = child.take() {
+                        let _ = child.start_kill();
+                        let _ = child.wait().await;
+                    }
+                }
+                "Stopped the current task."
+            }
+            "codex" => {
+                self.ensure_codex_runtime(session_id).await?;
+                let request = {
+                    let mut protocols = self.codex_protocols.lock().unwrap();
+                    protocols
+                        .get_mut(session_id)
+                        .and_then(CodexSessionProtocol::interrupt_current_turn)
+                };
+
+                if let Some(request) = request {
+                    if let Some(sender) =
+                        self.runtime_inputs.lock().unwrap().get(session_id).cloned()
+                    {
+                        sender
+                            .send(encode_json_line(request))
+                            .map_err(|_| anyhow::anyhow!("managed runtime input channel closed"))?;
+                    }
+                    "Stopped the current task."
+                } else {
+                    "No current task to stop."
+                }
+            }
+            _ => "No current task to stop.",
+        };
+
+        self.store
+            .append_event_returning_id(
+                session_id,
+                "assistant.message",
+                &serde_json::json!({ "text": stop_message }).to_string(),
+            )
+            .await
+    }
+
     async fn drain_codex_pending_messages(&self, session_id: &str) -> anyhow::Result<()> {
         let Some(sender) = self.runtime_inputs.lock().unwrap().get(session_id).cloned() else {
             return Ok(());
@@ -459,6 +645,7 @@ impl SessionService {
                 r#"{"status":"running"}"#,
             )
             .await?;
+        self.touch_session_heartbeat(session_id);
 
         let launch_command = claude_turn_launch(&message, runtime_session_id.as_deref());
         let mut child = (self.process_spawner)(launch_command)?;
@@ -470,6 +657,7 @@ impl SessionService {
         let session_id = session_id.to_string();
         let runtime_session_id_store = self.store.clone();
         let runtime_children = self.runtime_children.clone();
+        let session_heartbeats = self.session_heartbeats.clone();
         let child_handle = Arc::new(TokioMutex::new(Some(child)));
         runtime_children
             .lock()
@@ -480,6 +668,12 @@ impl SessionService {
             let mut lines = BufReader::new(stdout).lines();
 
             while let Ok(Some(line)) = lines.next_line().await {
+                // Touch heartbeat on every line received from the agent
+                session_heartbeats
+                    .lock()
+                    .unwrap()
+                    .insert(session_id.clone(), std::time::Instant::now());
+
                 if let Ok(Some(runtime_session_id)) = parse_claude_result_session_id(&line) {
                     let _ = runtime_session_id_store
                         .update_runtime_session_id(&session_id, &runtime_session_id)
@@ -524,6 +718,8 @@ impl SessionService {
                 let _ = child.wait().await;
             }
             remove_runtime_child_if_current(&runtime_children, &session_id, &child_handle);
+            // Clean up heartbeat tracking when the session stops
+            session_heartbeats.lock().unwrap().remove(&session_id);
             let _ = store.update_session_status(&session_id, "suspended").await;
             let _ = store
                 .append_event(
@@ -586,6 +782,8 @@ impl SessionService {
         session_id: &str,
         mut protocol: CodexSessionProtocol,
     ) -> anyhow::Result<()> {
+        self.touch_session_heartbeat(session_id);
+
         let mut child = (self.process_spawner)(codex_managed_launch())?;
         let stdin = child
             .stdin
@@ -597,6 +795,7 @@ impl SessionService {
             .ok_or_else(|| anyhow::anyhow!("managed codex session missing stdout"))?;
         let store = self.store.clone();
         let session_id = session_id.to_string();
+        let session_heartbeats = self.session_heartbeats.clone();
         let runtime_inputs = self.runtime_inputs.clone();
         let codex_protocols = self.codex_protocols.clone();
         let runtime_children = self.runtime_children.clone();
@@ -624,8 +823,7 @@ impl SessionService {
             let writer = tokio::spawn(async move {
                 while let Some(message) = rx.recv().await {
                     if stdin.write_all(message.as_bytes()).await.is_err() {
-                        let message =
-                            "Codex runtime input stream closed before the current message completed.";
+                        let message = "Codex runtime input stream closed before the current message completed.";
                         let _ = writer_store
                             .reset_in_flight_user_messages(&writer_session_id)
                             .await;
@@ -651,8 +849,7 @@ impl SessionService {
                         break;
                     }
                     if stdin.flush().await.is_err() {
-                        let message =
-                            "Codex runtime input stream closed before the current message completed.";
+                        let message = "Codex runtime input stream closed before the current message completed.";
                         let _ = writer_store
                             .reset_in_flight_user_messages(&writer_session_id)
                             .await;
@@ -687,6 +884,11 @@ impl SessionService {
             let mut lines = BufReader::new(stdout).lines();
 
             while let Ok(Some(line)) = lines.next_line().await {
+                session_heartbeats
+                    .lock()
+                    .unwrap()
+                    .insert(session_id.clone(), std::time::Instant::now());
+
                 let result = {
                     let mut protocols = codex_protocols.lock().unwrap();
                     protocols
@@ -797,6 +999,7 @@ impl SessionService {
             };
             codex_protocols.lock().unwrap().remove(&session_id);
             remove_runtime_child_if_current(&runtime_children, &session_id, &child_handle);
+            session_heartbeats.lock().unwrap().remove(&session_id);
 
             let in_flight_message = store
                 .in_flight_user_message(&session_id)
@@ -871,7 +1074,11 @@ impl SessionService {
         }
 
         let has_sender = self.runtime_inputs.lock().unwrap().contains_key(session_id);
-        let has_child = self.runtime_children.lock().unwrap().contains_key(session_id);
+        let has_child = self
+            .runtime_children
+            .lock()
+            .unwrap()
+            .contains_key(session_id);
         !has_sender || !has_child
     }
 
@@ -912,14 +1119,40 @@ impl SessionService {
                     .await?;
             }
 
-            self.spawn_attached_codex_runtime(session_id, &snapshot.session.workspace_path, thread_id)
-                .await?;
+            self.spawn_attached_codex_runtime(
+                session_id,
+                &snapshot.session.workspace_path,
+                thread_id,
+            )
+            .await?;
         } else if snapshot.session.source_kind == "managed" {
             self.spawn_codex_runtime(session_id, &snapshot.session.workspace_path)
                 .await?;
         }
 
         Ok(())
+    }
+
+    pub async fn close_store_for_test(&self) {
+        self.store.close_for_test().await;
+    }
+
+    pub fn has_heartbeat_for_test(&self, session_id: &str) -> bool {
+        self.session_heartbeats
+            .lock()
+            .unwrap()
+            .contains_key(session_id)
+    }
+
+    pub async fn hold_session_lock_for_test(
+        &self,
+        session_id: &str,
+        ready: tokio::sync::oneshot::Sender<()>,
+        release: Arc<tokio::sync::Notify>,
+    ) {
+        let _guard = self.lock_session(session_id).await;
+        let _ = ready.send(());
+        release.notified().await;
     }
 }
 
@@ -1023,7 +1256,8 @@ async fn drain_one_codex_pending_message(
 
     for request in outgoing {
         if sender.send(encode_json_line(request)).is_err() {
-            let message = "Codex runtime input channel closed before the pending message could be sent.";
+            let message =
+                "Codex runtime input channel closed before the pending message could be sent.";
             store.reset_in_flight_user_messages(session_id).await?;
             store
                 .update_runtime_health(session_id, "desynced", Some("transport"), Some(message))
@@ -1033,11 +1267,11 @@ async fn drain_one_codex_pending_message(
                     session_id,
                     "session.error",
                     &serde_json::json!({
-                    "message": message,
-                    "pendingMessageId": pending_message_id,
-                    "pendingMessageText": pending_message_text,
-                    "willRetry": true
-                })
+                        "message": message,
+                        "pendingMessageId": pending_message_id,
+                        "pendingMessageText": pending_message_text,
+                        "willRetry": true
+                    })
                     .to_string(),
                 )
                 .await?;

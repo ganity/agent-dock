@@ -556,6 +556,47 @@ fn protocol_maps_new_slash_command_to_fresh_thread_start_request() {
     let event = result.event.unwrap();
     assert_eq!(event.event_type, "assistant.message");
     assert!(event.payload_json.contains("Started a new agent session"));
+
+    let next_outgoing = protocol
+        .enqueue_user_message(UserMessage {
+            text: "follow up".into(),
+            image_paths: Vec::new(),
+        })
+        .unwrap();
+    assert_eq!(next_outgoing.len(), 1);
+    assert_eq!(next_outgoing[0]["method"], "turn/start");
+    assert_eq!(next_outgoing[0]["params"]["threadId"], "thread-2");
+}
+
+#[test]
+fn protocol_maps_stop_slash_command_to_turn_interrupt_request() {
+    let mut protocol = ready_protocol();
+    let outgoing = protocol
+        .enqueue_user_message(UserMessage {
+            text: "long running".into(),
+            image_paths: Vec::new(),
+        })
+        .unwrap();
+    assert_eq!(outgoing.len(), 1);
+    assert_eq!(outgoing[0]["method"], "turn/start");
+
+    protocol
+        .handle_server_line(
+            r#"{"jsonrpc":"2.0","method":"turn/started","params":{"turnId":"turn-1","threadId":"thread-1"}}"#,
+        )
+        .unwrap();
+
+    let outgoing = protocol
+        .enqueue_user_message(UserMessage {
+            text: "/stop".into(),
+            image_paths: Vec::new(),
+        })
+        .unwrap();
+
+    assert_eq!(outgoing.len(), 1);
+    assert_eq!(outgoing[0]["method"], "turn/interrupt");
+    assert_eq!(outgoing[0]["params"]["threadId"], "thread-1");
+    assert_eq!(outgoing[0]["params"]["turnId"], "turn-1");
 }
 
 #[test]

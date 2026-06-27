@@ -22,6 +22,10 @@ use crate::{
 
 const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const HEARTBEAT_INTERVAL: Duration = Duration::from_millis(250);
+/// Maximum number of events to buffer before forcing a resync.
+/// If a client falls behind by more than this, it will be told to resync
+/// from scratch rather than receiving potentially stale/incomplete data.
+const MAX_EVENT_LAG: i64 = 10_000;
 
 #[derive(Deserialize)]
 pub struct EventStreamQuery {
@@ -120,6 +124,26 @@ async fn follow_events(
                                     "reason": "cursor_ahead",
                                     "requestedAfter": cursor,
                                     "latestEventId": latest_event_id
+                                }
+                            })
+                            .to_string()
+                            .into(),
+                        ))
+                        .await?;
+                    cursor = latest_event_id;
+                    last_sent = Instant::now();
+                } else if latest_event_id - cursor > MAX_EVENT_LAG {
+                    // Client is too far behind; request a full resync
+                    socket
+                        .send(Message::Text(
+                            json!({
+                                "id": latest_event_id,
+                                "eventType": "session.resync.required",
+                                "payload": {
+                                    "reason": "cursor_too_far_behind",
+                                    "requestedAfter": cursor,
+                                    "latestEventId": latest_event_id,
+                                    "gap": latest_event_id - cursor
                                 }
                             })
                             .to_string()

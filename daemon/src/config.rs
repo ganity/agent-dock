@@ -31,6 +31,13 @@ pub struct AppConfig {
     pub claude_projects_path: Option<String>,
     pub roots: Vec<WorkspaceRoot>,
     pub voice_input: Option<VoiceInputConfig>,
+    /// Maximum number of API requests per user within the rate-limit window.
+    /// 0 disables rate limiting. Defaults to 60 if not set.
+    #[serde(default)]
+    pub rate_limit_max_requests: Option<usize>,
+    /// Rate-limit window in seconds. Defaults to 60 if not set.
+    #[serde(default)]
+    pub rate_limit_window_secs: Option<u64>,
 }
 
 impl AppConfig {
@@ -89,6 +96,8 @@ impl AppConfig {
                 path: "/tmp/workspace".into(),
             }],
             voice_input: None,
+            rate_limit_max_requests: None,
+            rate_limit_window_secs: None,
         }
     }
 }

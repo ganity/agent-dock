@@ -77,16 +77,41 @@ impl CodexSessionProtocol {
     }
 
     pub fn enqueue_user_message(&mut self, message: UserMessage) -> anyhow::Result<Vec<Value>> {
-        if let Some(thread_id) = &self.thread_id {
+        if let Some(thread_id) = self.thread_id.clone() {
+            let stop_request = if message.image_paths.is_empty() {
+                parse_slash_command(&message.text)
+                    .filter(|command| matches!(command, PendingCommand::StopTurn))
+                    .and_then(|_| self.interrupt_current_turn())
+            } else {
+                None
+            };
+            if let Some(request) = stop_request {
+                return Ok(vec![request]);
+            }
             if self.in_flight_user_message {
                 self.queued_messages.push_back(message);
                 return Ok(Vec::new());
             }
-            return Ok(self.next_user_message_requests(thread_id.clone(), message));
+            return Ok(self.next_user_message_requests(thread_id, message));
         }
 
         self.queued_messages.push_back(message);
         Ok(Vec::new())
+    }
+
+    pub fn interrupt_current_turn(&mut self) -> Option<Value> {
+        let thread_id = self.thread_id.clone()?;
+        let current_turn_id = self.current_turn_id.clone()?;
+        let command = PendingCommand::StopTurn;
+        let request_id = self.next_id(command.request_id_label());
+        self.pending_command_requests
+            .insert(request_id.clone(), command);
+        self.in_flight_user_message = true;
+        Some(build_turn_interrupt_request(
+            &request_id,
+            &thread_id,
+            &current_turn_id,
+        ))
     }
 
     pub fn is_thread_ready(&self) -> bool {
@@ -237,14 +262,16 @@ impl CodexSessionProtocol {
             self.in_flight_user_message = false;
             let mut runtime_session_id = None;
             let mut session_status = None;
-            let mut runtime_health =
-                runtime_error_message.map(|_| "recoverable_error".to_string());
+            let mut runtime_health = runtime_error_message.map(|_| "recoverable_error".to_string());
             let mut runtime_error_kind = runtime_error_message
                 .map(|message| Some(classify_response_error_kind(message).to_string()));
             let mut next_runtime_error_message =
                 runtime_error_message.map(|message| Some(message.to_string()));
 
             if runtime_error_message.is_none() && matches!(command, PendingCommand::NewThread) {
+                self.current_turn_id = None;
+                self.in_flight_user_message = false;
+                self.queued_messages.clear();
                 let thread_id = response
                     .result
                     .get("thread")
@@ -302,6 +329,20 @@ impl CodexSessionProtocol {
         let Some(command) = parse_slash_command(&message.text) else {
             return vec![self.next_turn_start_request(thread_id, message)];
         };
+
+        if matches!(command, PendingCommand::NewThread) {
+            self.thread_id = None;
+            self.current_turn_id = None;
+            self.in_flight_user_message = false;
+            self.queued_messages.clear();
+        }
+
+        if matches!(command, PendingCommand::StopTurn) {
+            return self
+                .interrupt_current_turn()
+                .into_iter()
+                .collect::<Vec<_>>();
+        }
 
         let request_id = self.next_id(command.request_id_label());
         self.pending_command_requests
@@ -407,6 +448,7 @@ impl CodexSessionProtocol {
 #[derive(Clone, Debug)]
 enum PendingCommand {
     NewThread,
+    StopTurn,
     Compact,
     GoalGet,
     GoalSet { objective: String },
@@ -417,6 +459,7 @@ impl PendingCommand {
     fn request_id_label(&self) -> &'static str {
         match self {
             Self::NewThread => "thread-new",
+            Self::StopTurn => "turn-interrupt",
             Self::Compact => "thread-compact",
             Self::GoalGet => "thread-goal-get",
             Self::GoalSet { .. } => "thread-goal-set",
@@ -429,6 +472,10 @@ fn parse_slash_command(text: &str) -> Option<PendingCommand> {
     let trimmed = text.trim();
     if trimmed == "/new" {
         return Some(PendingCommand::NewThread);
+    }
+
+    if trimmed == "/stop" {
+        return Some(PendingCommand::StopTurn);
     }
 
     if trimmed == "/compact" {
@@ -463,6 +510,7 @@ fn build_command_request(
 ) -> Value {
     match command {
         PendingCommand::NewThread => build_thread_start_request(request_id, cwd),
+        PendingCommand::StopTurn => unreachable!("stop is handled before generic command mapping"),
         PendingCommand::Compact => build_thread_compact_start_request(request_id, thread_id),
         PendingCommand::GoalGet => build_thread_goal_get_request(request_id, thread_id),
         PendingCommand::GoalSet { objective } => {
@@ -590,6 +638,18 @@ pub fn build_turn_start_request(request_id: &str, thread_id: &str, message: &Use
     })
 }
 
+pub fn build_turn_interrupt_request(request_id: &str, thread_id: &str, turn_id: &str) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "method": "turn/interrupt",
+        "params": {
+            "threadId": thread_id,
+            "turnId": turn_id
+        }
+    })
+}
+
 fn command_response_event(
     command: PendingCommand,
     result: &Value,
@@ -600,6 +660,7 @@ fn command_response_event(
     } else {
         match command {
             PendingCommand::NewThread => "Started a new agent session.".to_string(),
+            PendingCommand::StopTurn => "Stopped the current task.".to_string(),
             PendingCommand::Compact => "Compaction started.".to_string(),
             PendingCommand::GoalGet => match result.get("goal") {
                 Some(Value::Null) | None => "No active goal.".to_string(),

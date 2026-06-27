@@ -1,9 +1,13 @@
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
+    time::Duration,
 };
 
 use crate::user::store::SqliteUserStore;
+
+/// Default session lifetime: 7 days.
+const DEFAULT_SESSION_TTL: Duration = Duration::from_secs(7 * 24 * 3600);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CurrentUser {
@@ -13,10 +17,17 @@ pub struct CurrentUser {
     pub is_admin: bool,
 }
 
+/// A session entry that tracks when it was created for TTL enforcement.
+struct SessionEntry {
+    user: CurrentUser,
+    created_at: std::time::Instant,
+}
+
 #[derive(Clone)]
 pub struct AuthState {
     users: SqliteUserStore,
-    sessions: Arc<Mutex<HashMap<String, CurrentUser>>>,
+    sessions: Arc<Mutex<HashMap<String, SessionEntry>>>,
+    session_ttl: Duration,
 }
 
 pub enum CreateUserError {
@@ -36,6 +47,7 @@ impl AuthState {
         Self {
             users,
             sessions: Arc::new(Mutex::new(HashMap::new())),
+            session_ttl: DEFAULT_SESSION_TTL,
         }
     }
 
@@ -59,7 +71,15 @@ impl AuthState {
     }
 
     pub fn current_user(&self, token: &str) -> Option<CurrentUser> {
-        self.sessions.lock().unwrap().get(token).cloned()
+        let sessions = self.sessions.lock().unwrap();
+        let entry = sessions.get(token)?;
+
+        // Check if the session has expired
+        if entry.created_at.elapsed() > self.session_ttl {
+            return None;
+        }
+
+        Some(entry.user.clone())
     }
 
     pub async fn list_users(&self) -> anyhow::Result<Vec<crate::user::store::StoredUser>> {
@@ -118,7 +138,7 @@ impl AuthState {
             self.sessions
                 .lock()
                 .unwrap()
-                .retain(|_, current_user| current_user.id != user_id);
+                .retain(|_, entry| entry.user.id != user_id);
             Ok(DeleteUserResult::Deleted)
         } else {
             Ok(DeleteUserResult::NotFound)
@@ -127,12 +147,25 @@ impl AuthState {
 
     fn create_session(&self, user: CurrentUser) -> String {
         let token = uuid::Uuid::new_v4().to_string();
-        self.sessions.lock().unwrap().insert(token.clone(), user);
+        self.sessions.lock().unwrap().insert(
+            token.clone(),
+            SessionEntry {
+                user,
+                created_at: std::time::Instant::now(),
+            },
+        );
         token
     }
 
     pub fn is_authenticated(&self, token: &str) -> bool {
-        self.sessions.lock().unwrap().contains_key(token)
+        self.current_user(token).is_some()
+    }
+
+    /// Evict expired sessions. Should be called periodically.
+    pub fn evict_expired_sessions(&self) {
+        let mut sessions = self.sessions.lock().unwrap();
+        let ttl = self.session_ttl;
+        sessions.retain(|_, entry| entry.created_at.elapsed() <= ttl);
     }
 }
 

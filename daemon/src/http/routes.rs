@@ -65,8 +65,24 @@ pub fn routes() -> Router<AppState> {
         .route("/ws/voice-input", get(stream_voice_input))
 }
 
-async fn health() -> Json<serde_json::Value> {
-    Json(json!({ "ok": true }))
+async fn health(State(state): State<AppState>) -> impl IntoResponse {
+    // Check database connectivity
+    let db_ok = state.sessions.list_sessions().await.is_ok();
+    let status = if db_ok {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+
+    (
+        status,
+        Json(json!({
+            "ok": db_ok,
+            "checks": {
+                "database": if db_ok { "ok" } else { "error" },
+            }
+        })),
+    )
 }
 
 fn session_token_from_headers(headers: &HeaderMap) -> Option<&str> {
@@ -125,7 +141,9 @@ async fn login(
                 .expect("newly-created auth token should resolve to user");
             let headers = [(
                 header::SET_COOKIE,
-                format!("agent_dock_session={token}; Path=/; HttpOnly"),
+                format!(
+                    "agent_dock_session={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=604800"
+                ),
             )];
             (
                 StatusCode::OK,
@@ -900,6 +918,18 @@ async fn send_session_message(
                     .into_response();
             }
         }
+    }
+
+    // ── Per-user rate limiting for new message sends ──
+    if !state.rate_limiter.allow(&format!("msg:{}", user.id)).await {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(json!({
+                "error": "RATE_LIMITED",
+                "message": "Too many messages. Please wait before sending again."
+            })),
+        )
+            .into_response();
     }
 
     match state

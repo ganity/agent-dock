@@ -580,6 +580,176 @@ async fn managed_codex_session_sends_new_slash_command_as_fresh_thread_start() {
 }
 
 #[tokio::test]
+async fn managed_codex_session_sends_stop_slash_command_as_turn_interrupt_request() {
+    let dir = tempdir().unwrap();
+    let captured_path = dir.path().join("stop-request.jsonl");
+    let captured_path_for_spawner = captured_path.clone();
+    let store = SqliteSessionStore::in_memory().await.unwrap();
+    let spawner = Arc::new(move |_command: LaunchCommand| {
+        spawn_command(LaunchCommand {
+            program: "sh".into(),
+            args: vec![
+                "-lc".into(),
+                "IFS= read -r _init; printf '%s\n' '{\"jsonrpc\":\"2.0\",\"id\":\"agent-dock-initialize-1\",\"result\":{}}'; \
+                 IFS= read -r _thread; printf '%s\n' '{\"jsonrpc\":\"2.0\",\"id\":\"agent-dock-thread-start-2\",\"result\":{\"thread\":{\"id\":\"thread-1\"}}}'; \
+                 IFS= read -r turn_request; printf '%s\n' '{\"jsonrpc\":\"2.0\",\"method\":\"turn/started\",\"params\":{\"threadId\":\"thread-1\",\"turnId\":\"turn-1\"}}'; \
+                 IFS= read -r command_request; printf '%s\n' \"$command_request\" > \"$1\"; \
+                 command_id=$(printf '%s' \"$command_request\" | sed -n 's/.*\"id\":\"\\([^\"]*\\)\".*/\\1/p'); \
+                 printf '{\"jsonrpc\":\"2.0\",\"id\":\"%s\",\"result\":{}}\n' \"$command_id\"".into(),
+                "agent-dock-test".into(),
+                captured_path_for_spawner.to_string_lossy().into_owned(),
+            ],
+        })
+    });
+
+    let service = SessionService::new_with_spawner(store, spawner);
+    let session_id = service
+        .create_managed_session("workspace".into(), "repo".into(), "codex".into(), None)
+        .await
+        .unwrap();
+
+    service
+        .send_user_message(&session_id, "long running".into())
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    service
+        .send_user_message(&session_id, "/stop".into())
+        .await
+        .unwrap();
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let captured = tokio::fs::read_to_string(captured_path).await.unwrap();
+    assert!(captured.contains(r#""method":"turn/interrupt""#));
+    assert!(captured.contains(r#""threadId":"thread-1""#));
+}
+
+#[tokio::test]
+async fn managed_claude_session_passes_new_through_and_updates_runtime_session_id() {
+    let store = SqliteSessionStore::in_memory().await.unwrap();
+    let recorded = Arc::new(std::sync::Mutex::new(Vec::<LaunchCommand>::new()));
+    let recorded_for_spawner = recorded.clone();
+    let spawner = Arc::new(move |command: LaunchCommand| {
+        recorded_for_spawner.lock().unwrap().push(command.clone());
+        let output = if command.args.iter().any(|arg| arg == "/new") {
+            "printf '%s\n' '{\"type\":\"result\",\"session_id\":\"claude-thread-2\",\"result\":\"new session\"}'"
+        } else {
+            "printf '%s\n' '{\"type\":\"result\",\"session_id\":\"claude-thread-1\",\"result\":\"done\"}'"
+        };
+        spawn_command(LaunchCommand {
+            program: "sh".into(),
+            args: vec!["-lc".into(), output.into()],
+        })
+    });
+
+    let service = SessionService::new_with_spawner(store, spawner);
+    let session_id = service
+        .create_managed_session("workspace".into(), "repo".into(), "claude".into(), None)
+        .await
+        .unwrap();
+
+    service
+        .send_user_message(&session_id, "hello".into())
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    service
+        .send_user_message(&session_id, "/new".into())
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let launches = recorded.lock().unwrap();
+    assert!(launches[1].args.iter().any(|arg| arg == "/new"));
+    let snapshot = service.load_snapshot(&session_id).await.unwrap();
+    assert_eq!(
+        snapshot.session.runtime_session_id.as_deref(),
+        Some("claude-thread-2")
+    );
+}
+
+#[tokio::test]
+async fn managed_claude_session_stop_interrupts_running_child() {
+    let store = SqliteSessionStore::in_memory().await.unwrap();
+    let recorded_pid = Arc::new(std::sync::Mutex::new(None::<u32>));
+    let recorded_pid_for_spawner = recorded_pid.clone();
+    let spawner = Arc::new(move |_command: LaunchCommand| {
+        let child = spawn_command(LaunchCommand {
+            program: "sh".into(),
+            args: vec!["-lc".into(), "exec sleep 30".into()],
+        })?;
+        *recorded_pid_for_spawner.lock().unwrap() = child.id();
+        Ok(child)
+    });
+
+    let service = SessionService::new_with_spawner(store, spawner);
+    let session_id = service
+        .create_managed_session("workspace".into(), "repo".into(), "claude".into(), None)
+        .await
+        .unwrap();
+
+    service
+        .send_user_message(&session_id, "long running".into())
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    service
+        .send_user_message(&session_id, "/stop".into())
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let pid = recorded_pid.lock().unwrap().unwrap();
+    let status = std::process::Command::new("sh")
+        .arg("-lc")
+        .arg(format!("kill -0 {pid} 2>/dev/null"))
+        .status()
+        .unwrap();
+    assert!(!status.success());
+
+    let snapshot = service.load_snapshot(&session_id).await.unwrap();
+    assert_eq!(snapshot.session.status, "suspended");
+}
+
+#[tokio::test]
+async fn managed_claude_session_stop_does_not_persist_stop_as_user_message() {
+    let store = SqliteSessionStore::in_memory().await.unwrap();
+    let spawner = Arc::new(move |_command: LaunchCommand| {
+        spawn_command(LaunchCommand {
+            program: "sh".into(),
+            args: vec!["-lc".into(), "exec sleep 30".into()],
+        })
+    });
+
+    let service = SessionService::new_with_spawner(store, spawner);
+    let session_id = service
+        .create_managed_session("workspace".into(), "repo".into(), "claude".into(), None)
+        .await
+        .unwrap();
+
+    service
+        .send_user_message(&session_id, "long running".into())
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    service
+        .send_user_message(&session_id, "/stop".into())
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let snapshot = service.load_snapshot(&session_id).await.unwrap();
+    assert!(!snapshot.events.iter().any(|event| {
+        event.event_type == "user.message" && event.payload_json.contains("\"text\":\"/stop\"")
+    }));
+}
+
+#[tokio::test]
 async fn managed_codex_session_recovers_after_service_restart_and_resumes_thread() {
     let dir = tempdir().unwrap();
     let db_path = dir.path().join("agent-dock.sqlite3");
@@ -1251,7 +1421,12 @@ async fn managed_codex_session_marks_send_failure_as_desynced_and_requeues_messa
         .await
         .unwrap();
     seed_store
-        .append_user_message_and_enqueue_pending(&session_id, None, "retry after desync".into(), &[])
+        .append_user_message_and_enqueue_pending(
+            &session_id,
+            None,
+            "retry after desync".into(),
+            &[],
+        )
         .await
         .unwrap();
     drop(seed_store);

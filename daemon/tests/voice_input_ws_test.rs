@@ -86,6 +86,8 @@ async fn voice_input_websocket_proxies_transcripts_from_asr_server() {
             access_token: "token-456".into(),
             resource_id: "volc.bigasr.sauc.duration".into(),
         }),
+        rate_limit_max_requests: None,
+        rate_limit_window_secs: None,
     })
     .await;
 

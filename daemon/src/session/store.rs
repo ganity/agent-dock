@@ -644,6 +644,10 @@ impl SqliteSessionStore {
 
         Ok((events, has_more_history))
     }
+
+    pub async fn close_for_test(&self) {
+        self.pool.close().await;
+    }
 }
 
 fn row_to_pending_user_message(row: sqlx::sqlite::SqliteRow) -> anyhow::Result<PendingUserMessage> {

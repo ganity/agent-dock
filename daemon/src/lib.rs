@@ -3,6 +3,7 @@ pub mod adapters;
 pub mod auth;
 pub mod config;
 pub mod http;
+pub mod middleware;
 pub mod session;
 pub mod user;
 pub mod voice;
